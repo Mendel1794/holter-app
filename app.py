@@ -92,12 +92,12 @@ RM 79.502.624 SDS
 Nota: Sé exacto con los valores numéricos y diagnósticos del documento. No inventes datos que no figuren en las tablas.
 """
 
-def generar_con_reintentos(client, pdf_bytes, prompt):
-    # Lista de modelos alternativos en caso de congestión de servidores
-    modelos = ['gemini-3.8-flash', 'gemini-2.5-pro', 'gemini-2.0-flash']
+def procesar_con_ia(client, pdf_bytes, prompt):
+    # Modelos oficiales vigentes (sin versiones 2.x obsoletas)
+    modelos_disponibles = ['gemini-3.8-flash', 'gemini-3.8-pro']
     ultimo_error = None
 
-    for modelo in modelos:
+    for modelo in modelos_disponibles:
         for intento in range(3):
             try:
                 response = client.models.generate_content(
@@ -111,9 +111,9 @@ def generar_con_reintentos(client, pdf_bytes, prompt):
             except Exception as e:
                 ultimo_error = e
                 err_text = str(e)
-                # Si el servidor está saturado temporalmente (503/UNAVAILABLE), pausa 2s y reintenta
-                if "503" in err_text or "UNAVAILABLE" in err_text or "demand" in err_text:
-                    time.sleep(2)
+                # Si el servidor reporta alta demanda o límite temporal, espera y reintenta
+                if any(k in err_text for k in ["503", "429", "UNAVAILABLE", "demand", "RESOURCE_EXHAUSTED"]):
+                    time.sleep(3 + (intento * 2))  # Espera 3s en intento 1, 5s en intento 2
                     continue
                 else:
                     break
@@ -124,12 +124,12 @@ if uploaded_file is not None:
         st.warning("⚠️ Debes configurar la API Key de Gemini en la barra lateral izquierda o en Secrets.")
     else:
         if st.button("Generar Lectura del Estudio", type="primary"):
-            with st.spinner("Analizando trazados y tablas del paciente..."):
+            with st.spinner("Analizando trazados y tablas del paciente con IA..."):
                 try:
                     client = genai.Client(api_key=api_key)
                     pdf_bytes = uploaded_file.getvalue()
 
-                    texto_resultado = generar_con_reintentos(client, pdf_bytes, PROMPT_CARDIOLOGIA)
+                    texto_resultado = procesar_con_ia(client, pdf_bytes, PROMPT_CARDIOLOGIA)
 
                     st.success("✅ Lectura generada exitosamente.")
                     informe = st.text_area("Resultado (editable antes de copiar o imprimir):", value=texto_resultado, height=380)
