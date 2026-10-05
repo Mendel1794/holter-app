@@ -128,7 +128,6 @@ st.markdown("""
 # ==========================================
 # 0. MÓDULO PÚBLICO: VALIDACIÓN POR QR
 # ==========================================
-# Si el usuario entra escaneando el QR, se le muestra la pantalla de certificación oficial
 params = st.query_params
 if "val" in params:
     codigo_val = params.get("val", "N/A")
@@ -175,7 +174,6 @@ if "val" in params:
 # UTILIDAD: GENERACIÓN DE QR COMO URL
 # ==========================================
 def generar_qr_verificacion(paciente, medico, fecha_str, codigo_uuid):
-    # Enlace directo que abrirá cualquier celular al escanear
     url_base = "https://holtercencardio.streamlit.app/"
     query_string = urllib.parse.urlencode({
         "val": codigo_uuid[:12],
@@ -256,7 +254,7 @@ def normalizar_nombre_archivo(nombre):
     return limpio if limpio else "PACIENTE"
 
 # ==========================================
-# BASE DE DATOS LOCAL
+# BASE DE DATOS LOCAL CON BLINDAJE RETROCOMPATIBLE
 # ==========================================
 def init_db():
     conn = sqlite3.connect("historial_holter.db")
@@ -326,7 +324,7 @@ def eliminar_estudio_db(estudio_id):
     conn.close()
 
 # ==========================================
-# 1. PERFILES MÉDICOS Y SELECTOR
+# 1. PERFILES MÉDICOS Y ACCESO
 # ==========================================
 LISTA_ESPECIALISTAS = [
     {
@@ -432,7 +430,7 @@ with st.sidebar:
         cerrar_sesion()
         st.rerun()
     st.divider()
-    st.caption("CENCARDIO · Plataforma Médica v7.3")
+    st.caption("CENCARDIO · Plataforma Médica v7.4")
 
 c_head1, c_head2 = st.columns([1, 6])
 with c_head1:
@@ -546,6 +544,56 @@ def extraer_datos_spacelabs(pdf_bytes, filename=""):
 
     return datos
 
+# ==========================================
+# MOTOR DE SÍNTESIS DIAGNÓSTICA AUTOMÁTICA
+# ==========================================
+def sintetizar_conclusion_automatica(d):
+    partes = []
+
+    # 1. Ritmo de base y respuesta cronotrópica
+    if d["fc_prom"] < 50:
+        partes.append(f"Ritmo sinusal con tendencia a la bradicardia (FC promedio {d['fc_prom']} lpm).")
+    elif d["fc_prom"] > 100:
+        partes.append(f"Ritmo sinusal con taquicardia sostenida (FC promedio {d['fc_prom']} lpm).")
+    else:
+        partes.append(f"Ritmo sinusal con respuesta ventricular promedio conservada ({d['fc_prom']} lpm).")
+
+    # 2. Conducción y pausas
+    if d["pausas"] > 0:
+        partes.append(f"Presencia de {d['pausas']} pausas patológicas (> 2.0 s), sugestivas de disfunción del automatismo sinusal o bloqueo AV.")
+    else:
+        partes.append("Sin pausas patológicas ni bloqueos AV avanzados.")
+
+    # 3. Arritmias ventriculares
+    if d["tv_episodios"] > 0:
+        partes.append(f"Registro de taquicardia ventricular no sostenida ({d['tv_episodios']} episodios de TV).")
+    elif d["ev_total"] > 2000:
+        partes.append(f"Carga ectópica ventricular elevada ({d['ev_total']} EV/24h), amerita correlación ecocardiográfica.")
+    elif d["ev_total"] > 0:
+        partes.append(f"Ectopias ventriculares monomorfas de baja carga ({d['ev_total']} EV).")
+    else:
+        partes.append("Sin ectopia ventricular significativa.")
+
+    # 4. Arritmias supraventriculares
+    if d["tsv_episodios"] > 0:
+        partes.append(f"Episodios de taquicardia supraventricular paroxística documentados ({d['tsv_episodios']} TSV).")
+    elif d["esv_total"] > 500:
+        partes.append(f"Ectopia supraventricular frecuente ({d['esv_total']} ESV).")
+
+    # 5. Segmento ST / Isquemia
+    if d["st_episodios"] > 0:
+        partes.append(f"Cambios en la repolarización compatibles con isquemia miocárdica silente ({d['st_episodios']} episodios de infradesnivel del ST).")
+
+    # 6. Variabilidad y riesgo cardiovascular
+    if d["sdnn_24h"] < 50:
+        partes.append("Variabilidad autonómica de la FC severamente disminuida (marcador de alto riesgo cardiovascular).")
+    elif d["sdnn_24h"] <= 100:
+        partes.append("Variabilidad de la FC moderadamente reducida.")
+    else:
+        partes.append("Variabilidad de la FC conservada.")
+
+    return " ".join(partes)
+
 def redactar_interpretacion(d, perfil):
     p1 = f"1. Ritmo de sinusal frecuencia cardiaca promedio de {d['fc_prom']} latidos por minuto."
 
@@ -608,6 +656,9 @@ def redactar_interpretacion(d, perfil):
 
     p10 = f"10. Riesgo del paciente SDNN a 24 HRS ({riesgo})."
 
+    # Conclusión clínica sintetizada automáticamente
+    conclusion_texto = sintetizar_conclusion_automatica(d)
+
     informe = f"""INTERPRETACIÓN TEST HOLTER
 
 {p1}
@@ -620,6 +671,9 @@ def redactar_interpretacion(d, perfil):
 {p8}
 {p9}
 {p10}
+
+CONCLUSIÓN DIAGNÓSTICA:
+{conclusion_texto}
 
 {perfil['nombre_completo']}
 {perfil['especialidad']}
@@ -642,15 +696,16 @@ def inyectar_y_generar_preview(pdf_bytes, texto_informe, datos_paciente, perfil,
     if rects_h and rects_f:
         x0 = rects_h[0].x0 + 2
         y0 = rects_h[0].y1 + 4
-        y1 = rects_f[0].y0 - 10
+        y1 = rects_f[0].y0 - 8
         x1 = pagina1.rect.width - 36
         rect_hallazgos = fitz.Rect(x0, y0, x1, y1)
     else:
-        rect_hallazgos = fitz.Rect(35, 510, 565, 730)
+        rect_hallazgos = fitz.Rect(35, 508, 565, 730)
 
-    font_size = 8.2
+    # Auto-escalado de fuente para ajustar los 10 puntos y la conclusión
+    font_size = 7.8
     exito = False
-    while font_size >= 4.5:
+    while font_size >= 4.2:
         rc = pagina1.insert_textbox(
             rect_hallazgos,
             texto_informe,
@@ -662,7 +717,7 @@ def inyectar_y_generar_preview(pdf_bytes, texto_informe, datos_paciente, perfil,
         if rc >= 0:
             exito = True
             break
-        font_size -= 0.3
+        font_size -= 0.2
 
     if not exito:
         y_cursor = rect_hallazgos.y0
@@ -671,13 +726,13 @@ def inyectar_y_generar_preview(pdf_bytes, texto_informe, datos_paciente, perfil,
                 pagina1.insert_text(
                     fitz.Point(rect_hallazgos.x0, y_cursor),
                     linea,
-                    fontsize=6.5,
+                    fontsize=5.8,
                     fontname="helv",
                     color=(0, 0, 0)
                 )
-                y_cursor += 9.5
+                y_cursor += 8.5
 
-    # Estampado del QR como URL
+    # Estampado del QR
     fecha_emision = datetime.now().strftime("%Y-%m-%d")
     qr_bytes = generar_qr_verificacion(
         datos_paciente, 
@@ -732,7 +787,7 @@ with tab_procesar:
         bytes_originales = uploaded_file.getvalue()
 
         if "datos_actuales" not in st.session_state or st.session_state.get("archivo_actual") != uploaded_file.name:
-            with st.spinner("Extrayendo datos de Spacelabs..."):
+            with st.spinner("Analizando trazado de Spacelabs y sintetizando diagnóstico..."):
                 st.session_state.datos_actuales = extraer_datos_spacelabs(bytes_originales, uploaded_file.name)
                 st.session_state.texto_informe = redactar_interpretacion(st.session_state.datos_actuales, perfil_activo)
                 st.session_state.archivo_actual = uploaded_file.name
@@ -800,7 +855,7 @@ with tab_procesar:
 
             st.subheader("📝 Edición de la Interpretación")
             informe_para_grabar = st.text_area(
-                "Edita el texto antes de generar el documento final:",
+                "Edita el texto antes de generar el documento final (la conclusión se ha generado automáticamente):",
                 value=st.session_state.texto_informe,
                 height=350
             )
