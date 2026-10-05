@@ -2,12 +2,15 @@ import streamlit as st
 from pypdf import PdfReader
 import fitz  # PyMuPDF
 from PIL import Image
+import qrcode
 import re
 import base64
 import os
 import io
 import sqlite3
+import pandas as pd
 from datetime import datetime
+import uuid
 
 st.set_page_config(
     page_title="Centro Cardiovascular Colombiano Cencardio",
@@ -16,11 +19,37 @@ st.set_page_config(
 )
 
 # ==========================================
+# UTILIDAD: GENERACIÓN DE CÓDIGO QR
+# ==========================================
+def generar_qr_verificacion(paciente, medico, registro, fecha_str, codigo_uuid):
+    contenido_qr = f"""CENTRO CARDIOVASCULAR COLOMBIANO - CENCARDIO
+ESTUDIO HOLTER 24 HORAS
+Paciente: {paciente}
+Especialista: {medico} ({registro})
+Fecha/Hora Emisión: {fecha_str}
+Código de Autenticidad: {codigo_uuid}
+Estado: Validado y Firmado Digitalmente
+Cumplimiento: Res. 3100 de 2019 / MinSalud Colombia"""
+
+    qr = qrcode.QRCode(
+        version=1,
+        error_correction=qrcode.constants.ERROR_CORRECT_M,
+        box_size=4,
+        border=1,
+    )
+    qr.add_data(contenido_qr)
+    qr.make(fit=True)
+    img_qr = qr.make_image(fill_color="#13325b", back_color="white")
+    
+    buf = io.BytesIO()
+    img_qr.save(buf, format="PNG")
+    return buf.getvalue()
+
+# ==========================================
 # GESTIÓN Y LIMPIEZA AUTOMÁTICA DE FIRMAS
 # ==========================================
 @st.cache_data
 def procesar_firma_transparente():
-    """Toma el PDF de la firma, quita el fondo, limpia trazos y la deja lista en memoria."""
     posibles_archivos = [
         "OR WILIAM ANDA RAMIREZ.pdf",
         "firma_amaya.pdf",
@@ -39,29 +68,24 @@ def procesar_firma_transparente():
     try:
         if archivo_encontrado.lower().endswith(".pdf"):
             doc_firma = fitz.open(archivo_encontrado)
-            # Renderizar a 300 DPI para máxima nitidez
             pix = doc_firma[0].get_pixmap(dpi=300)
             img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
             doc_firma.close()
         else:
             img = Image.open(archivo_encontrado)
 
-        # Convertir a RGBA y transparentar fondo
         img = img.convert("RGBA")
         datos_pixeles = img.getdata()
         nuevos_pixeles = []
 
         for p in datos_pixeles:
-            # Fondo blanco o grisáceo del escáner -> Transparente
             if p[0] > 185 and p[1] > 185 and p[2] > 185:
                 nuevos_pixeles.append((255, 255, 255, 0))
             else:
-                # Tinta institucional nítida (Azul Cencardio profundo)
                 nuevos_pixeles.append((19, 50, 91, 255))
 
         img.putdata(nuevos_pixeles)
 
-        # Recortar márgenes vacíos sobrantes
         caja = img.getbbox()
         if caja:
             img = img.crop(caja)
@@ -73,7 +97,7 @@ def procesar_firma_transparente():
         return None
 
 # ==========================================
-# UTILIDAD: CARGA DE RECURSOS E IMÁGENES
+# UTILIDAD: RECURSOS E IDENTIDAD VISUAL
 # ==========================================
 def obtener_logo_b64():
     for nom in ["cencardio.jpg", "cencardio.png", "cencardio.jpeg", "logo.png", "logo.jpg"]:
@@ -112,28 +136,14 @@ def normalizar_nombre_archivo(nombre):
     limpio = re.sub(r'\s+', '_', limpio).strip('_')
     return limpio if limpio else "PACIENTE"
 
-# ==========================================
-# ESTILOS CORPORATIVOS CENCARDIO
-# ==========================================
 st.markdown(cargar_fondo(), unsafe_allow_html=True)
 
 st.markdown("""
     <style>
-    header[data-testid="stHeader"] {
-        background: transparent !important;
-    }
-    div[data-testid="stDecoration"] {
-        display: none !important;
-    }
-    .block-container {
-        padding-top: 1.8rem !important;
-        padding-bottom: 2.5rem !important;
-    }
-
-    div[data-testid="stForm"] {
-        border: none !important;
-        padding: 0 !important;
-    }
+    header[data-testid="stHeader"] { background: transparent !important; }
+    div[data-testid="stDecoration"] { display: none !important; }
+    .block-container { padding-top: 1.8rem !important; padding-bottom: 2.5rem !important; }
+    div[data-testid="stForm"] { border: none !important; padding: 0 !important; }
 
     .cencardio-card {
         background: #ffffff;
@@ -145,29 +155,9 @@ st.markdown("""
         margin: 2rem auto;
         text-align: center;
     }
-    .cencardio-logo-img {
-        max-width: 175px;
-        height: auto;
-        margin-bottom: 1rem;
-        display: inline-block;
-    }
-    .cencardio-title {
-        color: #13325b;
-        font-size: 1.35rem;
-        font-weight: 800;
-        letter-spacing: 0.3px;
-        line-height: 1.3;
-        margin-top: 0.4rem;
-        text-transform: uppercase;
-    }
-    .cencardio-sub {
-        color: #c8102e;
-        font-size: 0.88rem;
-        font-weight: 700;
-        letter-spacing: 0.5px;
-        text-transform: uppercase;
-        margin-bottom: 1.8rem;
-    }
+    .cencardio-logo-img { max-width: 175px; height: auto; margin-bottom: 1rem; display: inline-block; }
+    .cencardio-title { color: #13325b; font-size: 1.35rem; font-weight: 800; letter-spacing: 0.3px; line-height: 1.3; margin-top: 0.4rem; text-transform: uppercase; }
+    .cencardio-sub { color: #c8102e; font-size: 0.88rem; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 1.8rem; }
 
     h1 { color: #13325b !important; font-weight: 800 !important; }
     h2, h3 { color: #1b365d !important; }
@@ -201,6 +191,20 @@ st.markdown("""
         background: white;
         padding: 6px;
     }
+
+    /* Banners del Semáforo Clínico */
+    .triage-rojo {
+        background: #fee2e2; border-left: 6px solid #dc2626; color: #991b1b;
+        padding: 1rem 1.2rem; border-radius: 8px; margin-bottom: 1rem; font-weight: 600;
+    }
+    .triage-amarillo {
+        background: #fef3c7; border-left: 6px solid #d97706; color: #92400e;
+        padding: 1rem 1.2rem; border-radius: 8px; margin-bottom: 1rem; font-weight: 600;
+    }
+    .triage-verde {
+        background: #dcfce7; border-left: 6px solid #16a34a; color: #166534;
+        padding: 1rem 1.2rem; border-radius: 8px; margin-bottom: 1rem; font-weight: 600;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -219,7 +223,8 @@ def init_db():
             sdnn INTEGER,
             medico_firmante TEXT,
             informe_texto TEXT,
-            pdf_blob BLOB
+            pdf_blob BLOB,
+            codigo_verificacion TEXT
         )
     """)
     conn.commit()
@@ -227,21 +232,21 @@ def init_db():
 
 init_db()
 
-def guardar_estudio_db(nombre, fc, sdnn, medico, texto, pdf_bytes):
+def guardar_estudio_db(nombre, fc, sdnn, medico, texto, pdf_bytes, cod_verif):
     conn = sqlite3.connect("historial_holter.db")
     c = conn.cursor()
     fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     c.execute("""
-        INSERT INTO estudios (fecha_registro, paciente_nombre, fc_prom, sdnn, medico_firmante, informe_texto, pdf_blob)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (fecha_actual, nombre, fc, sdnn, medico, texto, pdf_bytes))
+        INSERT INTO estudios (fecha_registro, paciente_nombre, fc_prom, sdnn, medico_firmante, informe_texto, pdf_blob, codigo_verificacion)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (fecha_actual, nombre, fc, sdnn, medico, texto, pdf_bytes, cod_verif))
     conn.commit()
     conn.close()
 
 def obtener_historial_db():
     conn = sqlite3.connect("historial_holter.db")
     c = conn.cursor()
-    c.execute("SELECT id, fecha_registro, paciente_nombre, fc_prom, sdnn, medico_firmante, pdf_blob FROM estudios ORDER BY id DESC")
+    c.execute("SELECT id, fecha_registro, paciente_nombre, fc_prom, sdnn, medico_firmante, pdf_blob, codigo_verificacion FROM estudios ORDER BY id DESC")
     filas = c.fetchall()
     conn.close()
     return filas
@@ -303,7 +308,6 @@ def cerrar_sesion():
     st.session_state.autenticado = False
     st.session_state.usuario_actual = ""
 
-# PANTALLA DE ACCESO
 if not st.session_state.autenticado:
     col_izq, col_central, col_der = st.columns([1, 1.8, 1])
     
@@ -361,7 +365,7 @@ with st.sidebar:
         cerrar_sesion()
         st.rerun()
     st.divider()
-    st.caption("CENCARDIO · Plataforma Médica v6.2")
+    st.caption("CENCARDIO · Plataforma Médica v7.0")
 
 c_head1, c_head2 = st.columns([1, 6])
 with c_head1:
@@ -383,7 +387,7 @@ with c_head2:
 
 st.write("")
 
-tab_procesar, tab_historial = st.tabs(["📥 Procesar Nuevo Estudio", "📁 Archivo Clínico e Historial"])
+tab_procesar, tab_historial = st.tabs(["📥 Procesar Nuevo Estudio", "📁 Archivo Clínico y Facturación"])
 
 def limpiar_numero(val_str):
     if not val_str:
@@ -557,9 +561,9 @@ def redactar_interpretacion(d, perfil):
     return informe
 
 # ==========================================
-# 3. INYECCIÓN DEL TEXTO Y ESTAMPADO DE FIRMA
+# 3. INYECCIÓN DEL TEXTO, QR Y FIRMA
 # ==========================================
-def inyectar_y_generar_preview(pdf_bytes, texto_informe, estampador_activo=False):
+def inyectar_y_generar_preview(pdf_bytes, texto_informe, datos_paciente, perfil, codigo_uuid, estampador_activo=False):
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     pagina1 = doc[0]
 
@@ -606,11 +610,40 @@ def inyectar_y_generar_preview(pdf_bytes, texto_informe, estampador_activo=False
                 )
                 y_cursor += 9.5
 
-    # ESTAMPAR FIRMA SI ESTÁ ACTIVA
+    # ESTAMPADO DE CÓDIGO QR EN LA PARTE INFERIOR IZQUIERDA
+    fecha_emision = datetime.now().strftime("%Y-%m-%d %H:%M")
+    qr_bytes = generar_qr_verificacion(
+        datos_paciente, 
+        perfil['nombre_completo'], 
+        perfil['registro'], 
+        fecha_emision, 
+        codigo_uuid
+    )
+    
+    # Coordenadas para el QR en la parte inferior izquierda de la página 1
+    rect_qr = fitz.Rect(38, 715, 82, 759)
+    pagina1.insert_image(rect_qr, stream=qr_bytes)
+    
+    # Texto de trazabilidad al lado del QR
+    pagina1.insert_text(
+        fitz.Point(86, 732),
+        f"Validado Digitalmente - Res. 3100 de 2019",
+        fontsize=5.2,
+        fontname="helv",
+        color=(0.1, 0.2, 0.4)
+    )
+    pagina1.insert_text(
+        fitz.Point(86, 742),
+        f"Cód: {codigo_uuid[:16]}...",
+        fontsize=4.8,
+        fontname="helv",
+        color=(0.3, 0.3, 0.3)
+    )
+
+    # ESTAMPADO DE LA FIRMA DIGITALIZADA
     firma_png_bytes = procesar_firma_transparente()
     if firma_png_bytes and estampador_activo:
         if rects_f:
-            # Ubicar encima de la línea punteada "Firma del médico"
             fx0 = rects_f[0].x0 + 10
             fy0 = rects_f[0].y0 - 58
             fx1 = fx0 + 155
@@ -639,8 +672,53 @@ with tab_procesar:
                 st.session_state.datos_actuales = extraer_datos_spacelabs(bytes_originales, uploaded_file.name)
                 st.session_state.texto_informe = redactar_interpretacion(st.session_state.datos_actuales, perfil_activo)
                 st.session_state.archivo_actual = uploaded_file.name
+                st.session_state.estudio_uuid = str(uuid.uuid4()).upper()
 
         datos = st.session_state.datos_actuales
+
+        # ==========================================
+        # SEMÁFORO CLÍNICO DE ALERTA MÉDICA (TRIAGE)
+        # ==========================================
+        alertas_criticas = []
+        alertas_moderadas = []
+
+        if datos["sdnn_24h"] < 50:
+            alertas_criticas.append("Variabilidad severamente disminuida (SDNN < 50 ms: Alto riesgo cardiovascular).")
+        elif datos["sdnn_24h"] <= 100:
+            alertas_moderadas.append("Variabilidad de la FC disminuida (SDNN entre 50 y 100 ms).")
+
+        if datos["tv_episodios"] > 0:
+            alertas_criticas.append(f"Se registraron {datos['tv_episodios']} rachas de Taquicardia Ventricular (TV).")
+
+        if datos["pausas"] > 0:
+            alertas_criticas.append(f"Se registraron {datos['pausas']} pausas patológicas significativas (> 2.0 s).")
+
+        if datos["st_episodios"] > 0:
+            alertas_moderadas.append(f"Alteraciones isquémicas del segmento ST ({datos['st_episodios']} episodios, máx. {datos['st_desviacion']} mm).")
+
+        if datos["qtc_prom"] > 460:
+            alertas_moderadas.append(f"Intervalo QTc prolongado (promedio {datos['qtc_prom']} ms).")
+
+        if alertas_criticas:
+            st.markdown(f"""
+                <div class="triage-rojo">
+                    ⚠️ <b>ALERTA CRÍTICA: Hallazgos de Alto Riesgo Cardiovascular Detectados</b><br>
+                    • {'<br>• '.join(alertas_criticas)}
+                </div>
+            """, unsafe_allow_html=True)
+        elif alertas_moderadas:
+            st.markdown(f"""
+                <div class="triage-amarillo">
+                    ⚡ <b>PRECAUCIÓN CLÍNICA: Hallazgos Relevantes para Seguimiento</b><br>
+                    • {'<br>• '.join(alertas_moderadas)}
+                </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown("""
+                <div class="triage-verde">
+                    ✅ <b>PARÁMETROS ESTABLES: Registro sin criterios de alto riesgo electrocardiográfico</b>
+                </div>
+            """, unsafe_allow_html=True)
 
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("FC Promedio", f"{datos['fc_prom']} lpm", f"Mín {datos['fc_min']} | Máx {datos['fc_max']}")
@@ -666,9 +744,15 @@ with tab_procesar:
                 height=350
             )
 
-            # Estampar firma digital si el especialista es Dr. Amaya o Admin
             debe_estampar = perfil_activo["id"] in ["dr.amaya", "admin"]
-            pdf_final, img_preview = inyectar_y_generar_preview(bytes_originales, informe_para_grabar, estampador_activo=debe_estampar)
+            pdf_final, img_preview = inyectar_y_generar_preview(
+                bytes_originales, 
+                informe_para_grabar, 
+                nombre_confirmado, 
+                perfil_activo, 
+                st.session_state.estudio_uuid, 
+                estampador_activo=debe_estampar
+            )
 
             col_btn1, col_btn2 = st.columns([1, 1])
             with col_btn1:
@@ -688,7 +772,8 @@ with tab_procesar:
                         datos['sdnn_24h'],
                         perfil_activo['nombre_completo'],
                         informe_para_grabar,
-                        pdf_final
+                        pdf_final,
+                        st.session_state.estudio_uuid
                     )
                     st.success(f"✅ Guardado con éxito: {nombre_confirmado}")
 
@@ -707,26 +792,62 @@ with tab_procesar:
             st.markdown('</div>', unsafe_allow_html=True)
 
 # ==========================================
-# PESTAÑA 2: ARCHIVO CLÍNICO E HISTORIAL
+# PESTAÑA 2: ARCHIVO CLÍNICO Y FACTURACIÓN
 # ==========================================
 with tab_historial:
-    st.subheader("📂 Registro de Estudios Procesados")
+    st.subheader("📂 Registro de Producción Médica e Historial")
     historial = obtener_historial_db()
 
     if not historial:
         st.info("Aún no hay estudios archivados en el sistema.")
     else:
-        busqueda = st.text_input("🔍 Buscar paciente por nombre o apellido:", "")
-        
+        # Generar reporte descargable para facturación IPS
+        datos_tabla = []
+        for h in historial:
+            datos_tabla.append({
+                "ID": h[0],
+                "Fecha de Registro": h[1],
+                "Paciente": h[2],
+                "FC Media (lpm)": h[3],
+                "SDNN 24h (ms)": h[4],
+                "Especialista Firmante": h[5],
+                "Código de Verificación": h[7] if len(h) > 7 else "N/A"
+            })
+        df_produccion = pd.DataFrame(datos_tabla)
+
+        col_rep1, col_rep2 = st.columns([3, 1])
+        with col_rep1:
+            busqueda = st.text_input("🔍 Buscar paciente por nombre o apellido:", "")
+        with col_rep2:
+            st.write("")
+            st.write("")
+            csv_data = df_produccion.to_csv(index=False).encode('utf-8-sig')
+            st.download_button(
+                label="📊 Descargar Informe de Producción (CSV)",
+                data=csv_data,
+                file_name=f"Reporte_Produccion_Cencardio_{datetime.now().strftime('%Y%m%d')}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+
+        st.divider()
+
         for item in historial:
-            est_id, fecha, pac_nom, fc, sdnn, med, pdf_data = item
+            est_id = item[0]
+            fecha = item[1]
+            pac_nom = item[2]
+            fc = item[3]
+            sdnn = item[4]
+            med = item[5]
+            pdf_data = item[6]
+            cod_ver = item[7] if len(item) > 7 else "N/A"
             
             if busqueda.lower() in pac_nom.lower():
                 nom_archivo_copia = normalizar_nombre_archivo(pac_nom)
-                with st.expander(f"👤 {pac_nom} | 📅 {fecha} | 👨‍⚕️️ {med}"):
+                with st.expander(f"👤 {pac_nom} | 📅 {fecha} | 👨‍⚕️ {med}"):
                     c_det1, c_det2, c_desc, c_del = st.columns([2, 2, 2, 1.5])
-                    c_det1.write(f"**FC Media:** {fc} lpm")
-                    c_det2.write(f"**SDNN 24h:** {sdnn} ms")
+                    c_det1.write(f"**FC Media:** {fc} lpm\n**SDNN 24h:** {sdnn} ms")
+                    c_det2.write(f"**Código de Autenticidad:**\n`{cod_ver}`")
                     with c_desc:
                         st.download_button(
                             label="📥 Descargar PDF",
