@@ -1,97 +1,68 @@
 import streamlit as st
 from pypdf import PdfReader
+import fitz  # PyMuPDF para inyectar texto en el PDF original
 import re
 import base64
 import os
 
-# Configuración de página
 st.set_page_config(
     page_title="Lectura de Holter Cencardio",
     page_icon="🫀",
-    layout="centered"
+    layout="wide"
 )
 
 # ==========================================
-# GESTIÓN DE IMAGEN DE FONDO PERSONALIZADA
+# GESTIÓN DE FONDO PERSONALIZADO
 # ==========================================
-def cargar_imagen_fondo():
-    # Busca si subiste 'fondo.jpg' o 'fondo.png'
-    archivo_fondo = None
-    tipo_mime = "jpeg"
-    
-    if os.path.exists("fondo.jpg"):
-        archivo_fondo = "fondo.jpg"
-        tipo_mime = "jpeg"
-    elif os.path.exists("fondo.png"):
-        archivo_fondo = "fondo.png"
-        tipo_mime = "png"
-    elif os.path.exists("fondo.jpeg"):
-        archivo_fondo = "fondo.jpeg"
-        tipo_mime = "jpeg"
+def cargar_fondo():
+    for ext in ["fondo.jpg", "fondo.png", "fondo.jpeg"]:
+        if os.path.exists(ext):
+            with open(ext, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode()
+            mime = "png" if ext.endswith("png") else "jpeg"
+            return f"""
+            <style>
+            .stApp {{
+                background-image: linear-gradient(rgba(255, 255, 255, 0.88), rgba(255, 255, 255, 0.88)), 
+                                  url("data:image/{mime};base64,{b64}");
+                background-size: cover;
+                background-position: center;
+                background-attachment: fixed;
+            }}
+            </style>
+            """
+    return """
+    <style>
+    .stApp { background: linear-gradient(135deg, #e8f4f8 0%, #f4f8fa 50%, #eef5f9 100%); }
+    </style>
+    """
 
-    if archivo_fondo:
-        with open(archivo_fondo, "rb") as f:
-            b64_data = base64.b64encode(f.read()).decode()
-        return f"""
-        <style>
-        .stApp {{
-            /* Capa traslúcida blanca al 85% para mantener la legibilidad clínica del texto */
-            background-image: linear-gradient(rgba(255, 255, 255, 0.85), rgba(255, 255, 255, 0.85)), 
-                              url("data:image/{tipo_mime};base64,{b64_data}");
-            background-size: cover;
-            background-position: center;
-            background-attachment: fixed;
-        }}
-        </style>
-        """
-    else:
-        # Fondo por defecto si aún no subes tu imagen
-        return """
-        <style>
-        .stApp {
-            background: linear-gradient(135deg, #e8f4f8 0%, #f4f8fa 50%, #eef5f9 100%);
-        }
-        </style>
-        """
+st.markdown(cargar_fondo(), unsafe_allow_html=True)
 
-st.markdown(cargar_imagen_fondo(), unsafe_allow_html=True)
-
-# Estilos adicionales para textos y componentes
 st.markdown("""
     <style>
-    h1 {
-        color: #0c4a6e !important;
-        font-weight: 700 !important;
-    }
-    h2, h3 {
-        color: #0369a1 !important;
-    }
-    [data-testid="stMetricValue"] {
-        color: #0284c7 !important;
-        font-weight: 600;
-    }
+    h1 { color: #0c4a6e !important; font-weight: 700 !important; }
+    h2, h3 { color: #0369a1 !important; }
+    [data-testid="stMetricValue"] { color: #0284c7 !important; font-weight: 700; }
     .stButton > button {
         background-color: #0284c7 !important;
         color: white !important;
         border-radius: 8px;
-        border: none;
-        padding: 0.5rem 1rem;
         font-weight: 600;
-    }
-    .stButton > button:hover {
-        background-color: #0369a1 !important;
+        padding: 0.5rem 1.5rem;
     }
     textarea {
         background-color: #ffffff !important;
-        border: 1px solid #cbd5e1 !important;
+        border: 1px solid #94a3b8 !important;
         border-radius: 8px !important;
         font-family: monospace !important;
+        font-size: 13.5px !important;
     }
     </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 1. SEGURIDAD Y ACCESO (USUARIO / CLAVE)
+# 1. CONTROL DE ACCESO
 # ==========================================
 USUARIOS_AUTORIZADOS = {
     "dr.amaya": "Cardio2025*",
@@ -114,20 +85,17 @@ if not st.session_state.autenticado:
     with st.form("form_login"):
         usuario = st.text_input("Usuario")
         clave = st.text_input("Contraseña", type="password")
-        boton_ingresar = st.form_submit_button("Iniciar Sesión", type="primary")
-
-        if boton_ingresar:
+        if st.form_submit_button("Iniciar Sesión", type="primary"):
             if usuario in USUARIOS_AUTORIZADOS and USUARIOS_AUTORIZADOS[usuario] == clave:
                 st.session_state.autenticado = True
                 st.session_state.usuario_actual = usuario
                 st.rerun()
             else:
                 st.error("❌ Credenciales incorrectas. Verifica usuario y contraseña.")
-
     st.stop()
 
 # ==========================================
-# 2. PANEL PRINCIPAL
+# 2. MOTOR CLÍNICO SPACELABS
 # ==========================================
 with st.sidebar:
     st.write(f"👤 Conectado: **{st.session_state.usuario_actual}**")
@@ -135,14 +103,23 @@ with st.sidebar:
         cerrar_sesion()
         st.rerun()
     st.divider()
-    st.caption("CENCARDIO - Sistema de Lectura Automatizada")
+    st.caption("CENCARDIO - Sistema de Generación PDF v3.0")
 
 st.title("🫀 Lectura de Holter Cencardio")
-st.write("Carga el archivo PDF de Spacelabs para generar la lectura clínica individualizada.")
+st.write("Carga el PDF del equipo Spacelabs. El sistema extraerá los datos y estampará la lectura directamente en el recuadro oficial de Hallazgos.")
 
 uploaded_file = st.file_uploader("Cargar estudio Holter (PDF)", type=["pdf"])
 
-def procesar_estudio_holter(archivo_pdf):
+def limpiar_numero(val_str):
+    if not val_str:
+        return 0
+    val_str = val_str.replace(".", "").replace(",", ".")
+    try:
+        return int(float(val_str))
+    except:
+        return 0
+
+def extraer_datos_spacelabs(archivo_pdf):
     reader = PdfReader(archivo_pdf)
     texto = ""
     for page in reader.pages:
@@ -150,100 +127,130 @@ def procesar_estudio_holter(archivo_pdf):
         if t:
             texto += t + "\n"
 
-    # Frecuencia cardíaca
-    fc_prom = 70
-    fc_match = re.search(r"Prom(?:\.|\:)?\s*\|\s*(\d{2,3})", texto)
-    if not fc_match:
-        fc_match = re.search(r"Prom(?:\.|\:)?\s+(\d{2,3})", texto)
-    if fc_match:
-        fc_prom = int(fc_match.group(1))
+    datos = {}
 
-    # Ectopias ventriculares
-    ev_total = 0
-    ev_match = re.search(r"Latidos ventriculares:\s*(\d+)", texto)
-    if not ev_match:
-        ev_match = re.search(r"Ventricular\s*\|\s*(\d+)", texto)
-    if ev_match:
-        ev_total = int(ev_match.group(1))
+    # Paciente
+    paciente_match = re.search(r"ID paciente:.*?\n([A-ZÁÉÍÓÚÑ\s,]+)\nInforme Holter", texto)
+    if paciente_match:
+        datos["paciente"] = paciente_match.group(1).replace("\n", " ").strip()
+    else:
+        datos["paciente"] = "Paciente_Estudio"
 
-    # Rachas de TV
-    tv_match = re.search(r"TV\s*\|\s*(\d+)", texto)
-    tv_count = int(tv_match.group(1)) if tv_match else 0
+    # FC
+    fc_p = re.search(r"Prom\.?\s*(\d{2,3})", texto)
+    datos["fc_prom"] = int(fc_p.group(1)) if fc_p else 70
 
-    # Ectopias supraventriculares
-    esv_total = 0
-    esv_match = re.search(r"Latidos supraventriculares:\s*(\d+)", texto)
-    if not esv_match:
-        esv_match = re.search(r"Supraventricular\s*\|\s*(\d+)", texto)
-    if esv_match:
-        esv_total = int(esv_match.group(1))
+    fc_max = re.search(r"M[áa]x\s*(\d{2,3})", texto)
+    datos["fc_max"] = int(fc_max.group(1)) if fc_max else 100
+
+    fc_min = re.search(r"M[íi]n\s*(\d{2,3})", texto)
+    datos["fc_min"] = int(fc_min.group(1)) if fc_min else 55
 
     # Pausas
-    pausas = 0
-    pau_match = re.search(r"Pausa\s*\|\s*(\d+)", texto)
-    if pau_match:
-        pausas = int(pau_match.group(1))
+    pausa_match = re.search(r"\bPausa\s+(\d+)", texto)
+    datos["pausas"] = int(pausa_match.group(1)) if pausa_match else 0
+
+    # Arritmias Ventriculares
+    ev_m = re.search(r"Latidos ventriculares\s*:\s*([\d\.]+)", texto)
+    datos["ev_total"] = limpiar_numero(ev_m.group(1)) if ev_m else 0
+
+    tv_m = re.search(r"\bTV\s+([\d\.]+)", texto)
+    datos["tv_episodios"] = limpiar_numero(tv_m.group(1)) if tv_m else 0
+
+    dup_v_m = re.search(r"Apareado\s+([\d\.]+)", texto)
+    datos["ev_duplas"] = limpiar_numero(dup_v_m.group(1)) if dup_v_m else 0
+
+    big_m = re.search(r"Bigeminismo\s+([\d\.]+)", texto)
+    datos["bigeminismo"] = limpiar_numero(big_m.group(1)) if big_m else 0
+
+    # Arritmias Supraventriculares
+    esv_m = re.search(r"Latidos supraventriculares\s*:\s*([\d\.]+)", texto)
+    datos["esv_total"] = limpiar_numero(esv_m.group(1)) if esv_m else 0
+
+    tsv_m = re.search(r"\bTSV\s+([\d\.]+)", texto)
+    datos["tsv_episodios"] = limpiar_numero(tsv_m.group(1)) if tsv_m else 0
 
     # Segmento ST
-    st_depresion = 0
-    st_max_mm = "0.00"
-    st_match = re.search(r"Depresión ST\s*\|\s*(\d+)\s*\|\s*(-?[\d,\.]+)", texto)
-    if st_match:
-        st_depresion = int(st_match.group(1))
-        st_max_mm = st_match.group(2)
+    st_m = re.search(r"Depresi[óo]n ST\s+(\d+)\s+(-?[\d,\.]+)\s+([^\n]+)", texto)
+    if st_m:
+        datos["st_episodios"] = int(st_m.group(1))
+        datos["st_desviacion"] = st_m.group(2)
+    else:
+        st_alt = re.search(r"Depresi[óo]n ST\s+(\d+)", texto)
+        datos["st_episodios"] = int(st_alt.group(1)) if st_alt else 0
+        datos["st_desviacion"] = "0"
 
     # SDNN 24 Horas
-    sdnn = 85
-    sdnn_match = re.search(r"Valor de 24 horas\s*\|\s*\d+\s*\|\s*(\d+)", texto)
-    if sdnn_match:
-        sdnn = int(sdnn_match.group(1))
+    sdnn_m = re.search(r"Valor de 24 horas\s+[\d\.]+\s+([\d\.]+)", texto)
+    datos["sdnn_24h"] = int(sdnn_m.group(1)) if sdnn_m else 85
 
-    # ==========================================
-    # LÓGICA DE INTERPRETACIÓN (10 PUNTOS)
-    # ==========================================
-    p1 = f"1. Ritmo de sinusal frecuencia cardiaca promedio de {fc_prom} latidos por minuto."
-    p2 = "2. Intervalos PR normal y QTc normales."
+    # QTc
+    qtc_m = re.search(r"Todos los per[íi]odos\s+[\d\.]+\s+[\d\.]+\s+([\d\.]+)", texto)
+    datos["qtc_prom"] = int(qtc_m.group(1)) if qtc_m else 400
 
-    if st_depresion > 0:
-        p3 = f"3. Alteraciones isquémicas del segmento ST ({st_depresion} episodios de depresión del ST, máx. {st_max_mm} mm)."
+    return datos
+
+def redactar_interpretacion(d):
+    p1 = f"1. Ritmo de sinusal frecuencia cardiaca promedio de {d['fc_prom']} latidos por minuto."
+
+    if d["qtc_prom"] > 460:
+        p2 = f"2. Intervalos PR normal. Intervalo QTc prolongado (promedio {d['qtc_prom']} ms)."
+    else:
+        p2 = "2. Intervalos PR normal y QTc normales."
+
+    if d["st_episodios"] > 0:
+        p3 = f"3. Alteraciones isquémicas del segmento ST ({d['st_episodios']} episodios de depresión del ST, máx. {d['st_desviacion']} mm)."
     else:
         p3 = "3. Sin alteraciones isquémicas del segmento ST."
 
     p4 = "4. Sin Alteración en la conducción AV."
     p5 = "5. Sin Alteración en la conducción intraventricular."
 
-    if ev_total > 500 or tv_count > 0:
-        p6 = f"6. Alteración de los impulsos por ectopias supraventriculares y ventriculares frecuentes ({ev_total} EV con episodios de taquicardia ventricular y {esv_total} ESV)."
-    elif ev_total > 0 and esv_total > 0:
-        p6 = "6. Alteración de los impulsos por ectopias supraventriculares y ventriculares monomorfas."
-    elif esv_total > 0:
-        p6 = "6. Alteración de los impulsos por ectopias supraventriculares monomorfas."
-    elif ev_total > 0:
-        p6 = "6. Alteración de los impulsos por ectopias ventriculares monomorfas."
+    hallazgos_ectopia = []
+    if d["esv_total"] > 0:
+        if d["esv_total"] > 500:
+            hallazgos_ectopia.append(f"frecuentes ectopias supraventriculares ({d['esv_total']})")
+        else:
+            hallazgos_ectopia.append("ectopias supraventriculares")
+
+    if d["ev_total"] > 0:
+        detalles_v = []
+        if d["tv_episodios"] > 0:
+            detalles_v.append(f"{d['tv_episodios']} episodios de TV")
+        if d["ev_duplas"] > 0:
+            detalles_v.append(f"{d['ev_duplas']} duplas")
+        if d["bigeminismo"] > 0:
+            detalles_v.append("bigeminismo")
+        
+        if detalles_v:
+            hallazgos_ectopia.append(f"ventriculares frecuentes ({d['ev_total']} EV, incluyendo {', '.join(detalles_v)})")
+        else:
+            hallazgos_ectopia.append("ventriculares monomorfas")
+
+    if hallazgos_ectopia:
+        p6 = f"6. Alteración de los impulsos por {' y '.join(hallazgos_ectopia)}."
     else:
-        p6 = "6. Sin alteración significativa de los impulsos ectópicos."
+        p6 = "6. Sin alteración de los impulsos ectópicos de relevancia clínica."
 
     p7 = "7. No refirió síntomas."
 
+    sdnn = d["sdnn_24h"]
     if sdnn < 50:
         p8 = "8. Variabilidad severamente disminuida de la FC."
-    elif 50 <= sdnn <= 100:
-        p8 = "8. Variabilidad disminuida de la FC."
-    else:
-        p8 = "8. Variabilidad conservada de la FC."
-
-    if pausas == 0:
-        p9 = "9. Sin pausas significativas."
-    else:
-        p9 = f"9. Se registraron {pausas} pausas significativas (> 2.0 s)."
-
-    if sdnn < 50:
         riesgo = "Alto riesgo"
     elif 50 <= sdnn <= 100:
+        p8 = "8. Variabilidad disminuida de la FC."
         riesgo = "Riesgo medio"
     else:
-        riesgo = "Bajo riesgo"
-    p10 = f"10. Riesgo del paciente SDNN a 24 HRS ({riesgo} - {sdnn} ms)."
+        p8 = "8. Variabilidad conservada de la FC."
+        riesgo = "Bajo riesgo / Normal"
+
+    if d["pausas"] == 0:
+        p9 = "9. Sin pausas significativas."
+    else:
+        p9 = f"9. Se registraron {d['pausas']} pausas significativas (> 2.0 s)."
+
+    p10 = f"10. Riesgo del paciente SDNN a 24 HRS ({riesgo})."
 
     informe = f"""INTERPRETACIÓN TEST HOLTER
 
@@ -262,33 +269,70 @@ DR. WILLIAM AMAYA RAMIREZ
 INTERNISTA - CARDIÓLOGO
 RM 79.502.624 SDS"""
 
-    return informe, fc_prom, sdnn, ev_total, esv_total
+    return informe
 
 # ==========================================
-# 3. GENERACIÓN DE RESULTADO
+# 3. INYECCIÓN DIRECTA EN EL PDF ORIGINAL
+# ==========================================
+def inyectar_en_pdf_original(pdf_bytes, texto_informe):
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    pagina1 = doc[0]  # Página 1 de Spacelabs
+
+    # Coordenadas exactas del recuadro blanco de Hallazgos en Spacelabs:
+    # x0: 34, y0: 558, x1: 565, y1: 730
+    rect_hallazgos = fitz.Rect(34, 558, 565, 730)
+
+    # Inyectar el texto adaptando el tamaño tipográfico
+    pagina1.insert_textbox(
+        rect_hallazgos,
+        texto_informe,
+        fontsize=7.8,
+        fontname="helv",
+        color=(0, 0, 0),
+        align=fitz.TEXT_ALIGN_LEFT
+    )
+
+    pdf_modificado = doc.tobytes()
+    doc.close()
+    return pdf_modificado
+
+# ==========================================
+# 4. INTERFAZ DE USUARIO
 # ==========================================
 if uploaded_file is not None:
-    if st.button("Generar Lectura del Estudio", type="primary"):
-        with st.spinner("Procesando trazado del paciente..."):
-            informe_generado, fc, sdnn_val, ev, esv = procesar_estudio_holter(uploaded_file)
+    bytes_originales = uploaded_file.getvalue()
 
-        st.success("✅ Estudio procesado correctamente.")
+    if "datos_actuales" not in st.session_state or st.session_state.get("archivo_actual") != uploaded_file.name:
+        with st.spinner("Extrayendo datos de Spacelabs..."):
+            st.session_state.datos_actuales = extraer_datos_spacelabs(uploaded_file)
+            st.session_state.texto_informe = redactar_interpretacion(st.session_state.datos_actuales)
+            st.session_state.archivo_actual = uploaded_file.name
 
-        col1, col2, col3 = st.columns(3)
-        col1.metric("FC Promedio", f"{fc} lpm")
-        col2.metric("SDNN (24h)", f"{sdnn_val} ms")
-        col3.metric("Ectopias (EV / ESV)", f"{ev} / {esv}")
+    datos = st.session_state.datos_actuales
 
-        st.subheader("Resultado de la Interpretación")
-        resultado_editable = st.text_area(
-            "Texto listo para copiar o imprimir:",
-            value=informe_generado,
-            height=370
-        )
+    st.success("✅ Estudio procesado. Revisa los datos y ajusta el informe si es necesario:")
 
-        st.download_button(
-            label="Descargar Informe (.txt)",
-            data=resultado_editable,
-            file_name=f"Lectura_{uploaded_file.name}.txt",
-            mime="text/plain"
-        )
+    # Tarjetas de verificación clínica
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("FC Promedio", f"{datos['fc_prom']} lpm", f"Mín {datos['fc_min']} | Máx {datos['fc_max']}")
+    c2.metric("Ectopias Ventriculares", f"{datos['ev_total']} EV", f"TV: {datos['tv_episodios']}")
+    c3.metric("Ectopias Supraventriculares", f"{datos['esv_total']} ESV", f"TSV: {datos['tsv_episodios']}")
+    c4.metric("SDNN (24 Horas)", f"{datos['sdnn_24h']} ms", f"ST: {datos['st_episodios']} ep.")
+
+    st.subheader("Informe a estampar en el PDF")
+    informe_para_grabar = st.text_area(
+        "Puedes modificar cualquier línea del texto antes de generar el PDF final:",
+        value=st.session_state.texto_informe,
+        height=320
+    )
+
+    # Generación y descarga directa del PDF
+    pdf_final = inyectar_en_pdf_original(bytes_originales, informe_para_grabar)
+
+    st.download_button(
+        label="📄 DESCARGAR PDF OFICIAL DILIGENCIADO",
+        data=pdf_final,
+        file_name=f"Holter_{datos['paciente'].replace(' ', '_')}_Firmado.pdf",
+        mime="application/pdf",
+        type="primary"
+    )
