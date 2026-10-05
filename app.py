@@ -434,7 +434,7 @@ with st.sidebar:
         cerrar_sesion()
         st.rerun()
     st.divider()
-    st.caption("CENCARDIO · Plataforma Médica v7.5")
+    st.caption("CENCARDIO · Plataforma Médica v7.6")
 
 c_head1, c_head2 = st.columns([1, 6])
 with c_head1:
@@ -554,7 +554,6 @@ def extraer_datos_spacelabs(pdf_bytes, filename=""):
 def sintetizar_conclusion_automatica(d):
     partes = []
 
-    # 1. Ritmo y frecuencia cardíaca
     if d["fc_prom"] < 50:
         partes.append(f"Ritmo sinusal con tendencia a la bradicardia (FC promedio {d['fc_prom']} lpm).")
     elif d["fc_prom"] > 100:
@@ -562,13 +561,11 @@ def sintetizar_conclusion_automatica(d):
     else:
         partes.append(f"Ritmo sinusal con respuesta ventricular promedio conservada ({d['fc_prom']} lpm).")
 
-    # 2. Conducción y pausas
     if d["pausas"] > 0:
         partes.append(f"Presencia de {d['pausas']} pausas patológicas (> 2.0 s), sugestivas de disfunción sinusal o bloqueo AV.")
     else:
         partes.append("Sin pausas patológicas ni bloqueos AV avanzados.")
 
-    # 3. Arritmias ventriculares
     if d["tv_episodios"] > 0:
         partes.append(f"Registro de taquicardia ventricular no sostenida ({d['tv_episodios']} rachas de TV).")
     elif d["ev_total"] > 2000:
@@ -578,19 +575,16 @@ def sintetizar_conclusion_automatica(d):
     else:
         partes.append("Sin ectopia ventricular de relevancia clínica.")
 
-    # 4. Arritmias supraventriculares
     if d["tsv_episodios"] > 0:
         partes.append(f"Episodios de taquicardia supraventricular paroxística documentados ({d['tsv_episodios']} TSV).")
     elif d["esv_total"] > 500:
         partes.append(f"Ectopia supraventricular frecuente ({d['esv_total']} ESV).")
 
-    # 5. Segmento ST / Isquemia
     if d["st_episodios"] > 0:
         partes.append(f"Cambios en la repolarización compatibles con isquemia miocárdica silente ({d['st_episodios']} episodios de infradesnivel del ST).")
     else:
         partes.append("Sin alteraciones isquémicas del segmento ST.")
 
-    # 6. Variabilidad y riesgo autonómico
     if d["sdnn_24h"] < 50:
         partes.append("Variabilidad autonómica de la FC severamente disminuida (marcador de alto riesgo cardiovascular).")
     elif d["sdnn_24h"] <= 100:
@@ -687,7 +681,7 @@ CONCLUSIÓN DIAGNÓSTICA:
     return informe
 
 # ==========================================
-# 3. INYECCIÓN DEL TEXTO, QR Y FIRMA
+# 3. INYECCIÓN DEL TEXTO, QR Y FIRMA (SIN SOLAPAMIENTO)
 # ==========================================
 def inyectar_y_generar_preview(pdf_bytes, texto_informe, datos_paciente, perfil, codigo_uuid, estampador_activo=False):
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
@@ -698,18 +692,19 @@ def inyectar_y_generar_preview(pdf_bytes, texto_informe, datos_paciente, perfil,
     if not rects_f:
         rects_f = pagina1.search_for("Firma del operador")
 
+    # Delimitación del recuadro de hallazgos
     if rects_h and rects_f:
         x0 = rects_h[0].x0 + 2
         y0 = rects_h[0].y1 + 4
-        y1 = rects_f[0].y0 - 6
+        y1 = rects_f[0].y0 - 2
         x1 = pagina1.rect.width - 36
         rect_hallazgos = fitz.Rect(x0, y0, x1, y1)
     else:
-        rect_hallazgos = fitz.Rect(35, 508, 565, 730)
+        rect_hallazgos = fitz.Rect(35, 508, 565, 735)
 
-    # Cálculo seguro del tamaño de fuente en documento limpio
-    font_size = 7.6
-    for fs in [7.6, 7.2, 6.8, 6.4, 6.0, 5.5, 5.0]:
+    # Inserción con auto-escalado seguro para el texto clínico
+    font_size = 7.4
+    for fs in [7.4, 7.0, 6.6, 6.2, 5.8, 5.2, 4.8]:
         doc_test = fitz.open(stream=pdf_bytes, filetype="pdf")
         p_test = doc_test[0]
         rc = p_test.insert_textbox(
@@ -724,7 +719,6 @@ def inyectar_y_generar_preview(pdf_bytes, texto_informe, datos_paciente, perfil,
             font_size = fs
             break
 
-    # Inserción definitiva con el tamaño óptimo encontrado
     pagina1.insert_textbox(
         rect_hallazgos,
         texto_informe,
@@ -734,7 +728,13 @@ def inyectar_y_generar_preview(pdf_bytes, texto_informe, datos_paciente, perfil,
         align=fitz.TEXT_ALIGN_LEFT
     )
 
-    # Estampado del QR
+    # Coordenadas de la línea de firma a la derecha
+    y_base = rects_f[0].y0 if rects_f else 740
+
+    # ==========================================
+    # CÓDIGO QR Y VALIDACIÓN FORENSE EN EL CENTRO
+    # (Libera la esquina izquierda para el nombre del médico)
+    # ==========================================
     fecha_emision = datetime.now().strftime("%Y-%m-%d")
     qr_bytes = generar_qr_verificacion(
         datos_paciente, 
@@ -743,25 +743,35 @@ def inyectar_y_generar_preview(pdf_bytes, texto_informe, datos_paciente, perfil,
         codigo_uuid
     )
     
-    rect_qr = fitz.Rect(38, 715, 82, 759)
+    # Se ubica en el centro (x: 232 a 272), lejos del nombre (izq) y la firma (der)
+    rect_qr = fitz.Rect(232, y_base - 32, 272, y_base + 8)
     pagina1.insert_image(rect_qr, stream=qr_bytes)
     
     pagina1.insert_text(
-        fitz.Point(86, 732),
-        "Validado Digitalmente - Res. 3100 de 2019",
+        fitz.Point(276, y_base - 18),
+        "Validado Digitalmente",
         fontsize=5.2,
         fontname="helv",
-        color=(0.1, 0.2, 0.4)
+        color=(0.08, 0.2, 0.36)
     )
     pagina1.insert_text(
-        fitz.Point(86, 742),
-        f"Cód: {codigo_uuid[:12]}...",
-        fontsize=4.8,
+        fitz.Point(276, y_base - 9),
+        "Res. 3100 de 2019 - MinSalud",
+        fontsize=4.7,
         fontname="helv",
-        color=(0.3, 0.3, 0.3)
+        color=(0.25, 0.25, 0.25)
+    )
+    pagina1.insert_text(
+        fitz.Point(276, y_base),
+        f"Cód: {codigo_uuid[:12]}...",
+        fontsize=4.5,
+        fontname="helv",
+        color=(0.4, 0.4, 0.4)
     )
 
-    # Estampado de la firma
+    # ==========================================
+    # ESTAMPADO DE LA FIRMA DIGITAL A LA DERECHA
+    # ==========================================
     firma_png_bytes = procesar_firma_transparente()
     if firma_png_bytes and estampador_activo:
         if rects_f:
@@ -788,7 +798,6 @@ with tab_procesar:
     if uploaded_file is not None:
         bytes_originales = uploaded_file.getvalue()
 
-        # Detección inicial o cambio de archivo
         if "datos_actuales" not in st.session_state or st.session_state.get("archivo_actual") != uploaded_file.name:
             with st.spinner("Analizando trazado de Spacelabs y sintetizando diagnóstico..."):
                 st.session_state.datos_actuales = extraer_datos_spacelabs(bytes_originales, uploaded_file.name)
@@ -796,13 +805,11 @@ with tab_procesar:
                 st.session_state.archivo_actual = uploaded_file.name
                 st.session_state.estudio_uuid = str(uuid.uuid4()).upper()
 
-        # Rompedor de caché retroactivo: si la sesión tenía texto viejo sin conclusión, se fuerza su redacción
         if "CONCLUSIÓN DIAGNÓSTICA" not in st.session_state.get("texto_informe", ""):
             st.session_state.texto_informe = redactar_interpretacion(st.session_state.datos_actuales, perfil_activo)
 
         datos = st.session_state.datos_actuales
 
-        # Semáforo de triage
         alertas_criticas = []
         alertas_moderadas = []
 
@@ -852,7 +859,6 @@ with tab_procesar:
 
         st.divider()
 
-        # TARJETA VISUAL DE LA CONCLUSIÓN DIAGNÓSTICA EN PANTALLA
         st.markdown(f"""
             <div class="conclusion-box">
                 <b style="color: #13325b; font-size: 1.05rem;">🩺 Conclusión Diagnóstica Generada Automáticamente:</b><br>
