@@ -15,12 +15,139 @@ st.set_page_config(
 )
 
 # ==========================================
-# UTILIDAD: NORMALIZAR NOMBRE DE ARCHIVO
+# UTILIDAD: CARGA DE RECURSOS E IMÁGENES
 # ==========================================
+def obtener_logo_b64():
+    for nom in ["cencardio.jpg", "cencardio.png", "cencardio.jpeg", "logo.png", "logo.jpg"]:
+        if os.path.exists(nom):
+            with open(nom, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode()
+            mime = "png" if nom.endswith("png") else "jpeg"
+            return f"data:image/{mime};base64,{b64}"
+    return None
+
+def cargar_fondo():
+    for ext in ["fondo.jpg", "fondo.png", "fondo.jpeg"]:
+        if os.path.exists(ext):
+            with open(ext, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode()
+            mime = "png" if ext.endswith("png") else "jpeg"
+            return f"""
+            <style>
+            .stApp {{
+                background-image: linear-gradient(rgba(244, 247, 250, 0.92), rgba(244, 247, 250, 0.92)), 
+                                  url("data:image/{mime};base64,{b64}");
+                background-size: cover;
+                background-position: center;
+                background-attachment: fixed;
+            }}
+            </style>
+            """
+    return """
+    <style>
+    .stApp { background: linear-gradient(140deg, #f0f4f8 0%, #f8fafc 50%, #edf2f7 100%); }
+    </style>
+    """
+
 def normalizar_nombre_archivo(nombre):
     limpio = re.sub(r'[^A-Za-z0-9ÁÉÍÓÚáéíóúÑñ\s]', ' ', nombre)
     limpio = re.sub(r'\s+', '_', limpio).strip('_')
     return limpio if limpio else "PACIENTE"
+
+# ==========================================
+# ESTILOS CORPORATIVOS CENCARDIO
+# ==========================================
+st.markdown(cargar_fondo(), unsafe_allow_html=True)
+
+st.markdown("""
+    <style>
+    /* Ocultar elementos predeterminados de Streamlit */
+    header[data-testid="stHeader"] {
+        background: transparent !important;
+    }
+    div[data-testid="stDecoration"] {
+        display: none !important;
+    }
+    .block-container {
+        padding-top: 1.8rem !important;
+        padding-bottom: 2.5rem !important;
+    }
+
+    div[data-testid="stForm"] {
+        border: none !important;
+        padding: 0 !important;
+    }
+
+    /* Tarjeta de Inicio Institucional CENCARDIO */
+    .cencardio-card {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 18px;
+        padding: 2.4rem 2.8rem;
+        box-shadow: 0 12px 30px -8px rgba(19, 50, 91, 0.12);
+        max-width: 520px;
+        margin: 2rem auto;
+        text-align: center;
+    }
+    .cencardio-logo-img {
+        max-width: 175px;
+        height: auto;
+        margin-bottom: 1rem;
+        display: inline-block;
+    }
+    .cencardio-title {
+        color: #13325b;
+        font-size: 1.35rem;
+        font-weight: 800;
+        letter-spacing: 0.3px;
+        line-height: 1.3;
+        margin-top: 0.4rem;
+        text-transform: uppercase;
+    }
+    .cencardio-sub {
+        color: #c8102e;
+        font-size: 0.88rem;
+        font-weight: 700;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+        margin-bottom: 1.8rem;
+    }
+
+    /* Tipografía clínica */
+    h1 { color: #13325b !important; font-weight: 800 !important; }
+    h2, h3 { color: #1b365d !important; }
+    [data-testid="stMetricValue"] { color: #13325b !important; font-weight: 700; }
+    
+    .stButton > button {
+        background-color: #13325b !important;
+        color: white !important;
+        border-radius: 8px !important;
+        border: none !important;
+        font-weight: 600 !important;
+        padding: 0.55rem 1.4rem !important;
+        transition: all 0.2s ease;
+    }
+    .stButton > button:hover {
+        background-color: #c8102e !important;
+        color: white !important;
+    }
+
+    textarea {
+        background-color: #ffffff !important;
+        border: 1px solid #cbd5e1 !important;
+        border-radius: 8px !important;
+        font-family: monospace !important;
+        font-size: 13px !important;
+    }
+    .preview-container {
+        border: 2px solid #cbd5e1;
+        border-radius: 10px;
+        box-shadow: 0 6px 14px -3px rgba(19, 50, 91, 0.08);
+        background: white;
+        padding: 6px;
+    }
+    </style>
+""", unsafe_allow_html=True)
 
 # ==========================================
 # BASE DE DATOS LOCAL (HISTORIAL CLÍNICO)
@@ -72,131 +199,45 @@ def eliminar_estudio_db(estudio_id):
     conn.close()
 
 # ==========================================
-# GESTIÓN DE FONDO PERSONALIZADO
+# 1. PERFILES MÉDICOS Y SELECTOR (DR. AMAYA PRESELECCIONADO)
 # ==========================================
-def cargar_fondo():
-    for ext in ["fondo.jpg", "fondo.png", "fondo.jpeg"]:
-        if os.path.exists(ext):
-            with open(ext, "rb") as f:
-                b64 = base64.b64encode(f.read()).decode()
-            mime = "png" if ext.endswith("png") else "jpeg"
-            return f"""
-            <style>
-            .stApp {{
-                background-image: linear-gradient(rgba(240, 248, 252, 0.90), rgba(240, 248, 252, 0.90)), 
-                                  url("data:image/{mime};base64,{b64}");
-                background-size: cover;
-                background-position: center;
-                background-attachment: fixed;
-            }}
-            </style>
-            """
-    return """
-    <style>
-    .stApp { background: linear-gradient(135deg, #e8f4f8 0%, #f4f8fa 50%, #eef5f9 100%); }
-    </style>
-    """
-
-st.markdown(cargar_fondo(), unsafe_allow_html=True)
-
-# ==========================================
-# LIMPIEZA DE INTERFAZ Y ESTILOS AVANZADOS
-# ==========================================
-st.markdown("""
-    <style>
-    /* 1. Eliminar franjas y recuadros superiores de Streamlit */
-    header[data-testid="stHeader"] {
-        background-color: transparent !important;
-    }
-    div[data-testid="stDecoration"] {
-        display: none !important;
-    }
-    .block-container {
-        padding-top: 2rem !important;
-        padding-bottom: 3rem !important;
-    }
-
-    /* 2. Eliminar el borde rígido que Streamlit le pone a los formularios */
-    div[data-testid="stForm"] {
-        border: none !important;
-        padding: 0 !important;
-    }
-
-    /* 3. Tarjeta de Login limpia y profesional */
-    .login-box {
-        background: rgba(255, 255, 255, 0.95);
-        border: 1px solid rgba(203, 213, 225, 0.8);
-        border-radius: 16px;
-        padding: 2.5rem;
-        box-shadow: 0 10px 25px -5px rgba(12, 74, 110, 0.12);
-        max-width: 580px;
-        margin: 1rem auto;
-    }
-
-    /* 4. Tipografías y botones clínicos */
-    h1 {
-        color: #0c4a6e !important;
-        font-weight: 800 !important;
-        letter-spacing: -0.5px;
-    }
-    h2, h3 { color: #0369a1 !important; }
-    [data-testid="stMetricValue"] { color: #0284c7 !important; font-weight: 700; }
-    
-    .stButton > button {
-        border-radius: 8px;
-        font-weight: 600;
-        padding: 0.5rem 1.2rem;
-    }
-    textarea {
-        background-color: #ffffff !important;
-        border: 1px solid #94a3b8 !important;
-        border-radius: 8px !important;
-        font-family: monospace !important;
-        font-size: 13px !important;
-    }
-    .preview-container {
-        border: 2px solid #cbd5e1;
-        border-radius: 8px;
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-        background: white;
-        padding: 6px;
-    }
-    </style>
-""", unsafe_allow_html=True)
-
-# ==========================================
-# 1. PERFILES MÉDICOS Y SELECTOR DE ACCESO
-# ==========================================
-PERFILES_MEDICOS = {
-    "dr.suarez": {
-        "etiqueta": "👨‍⚕️ Dr. Martin Suárez Arámbula (Cardiólogo Hemodinamista)",
-        "clave": "Suarez2026*",
-        "nombre_completo": "DR. MARTIN SUÁREZ ARÁMBULA",
-        "especialidad": "MÉDICO INTERNISTA - CARDIÓLOGO HEMODINAMISTA",
-        "registro": "RM 13491094"
-    },
-    "dr.amaya": {
-        "etiqueta": "👨‍⚕️ Dr. William Amaya Ramirez (Internista - Cardiólogo)",
+LISTA_ESPECIALISTAS = [
+    {
+        "id": "dr.amaya",
+        "etiqueta": "Dr. William Amaya Ramirez (Internista - Cardiólogo)",
         "clave": "Cardio2025*",
         "nombre_completo": "DR. WILLIAM AMAYA RAMIREZ",
         "especialidad": "INTERNISTA - CARDIÓLOGO",
         "registro": "RM 79.502.624 SDS"
     },
-    "dra.cardio": {
-        "etiqueta": "👩‍⚕️ Dra. Paola Figueroa (Cardióloga)",
+    {
+        "id": "dr.suarez",
+        "etiqueta": "Dr. Martin Suárez Arámbula (Cardiólogo Hemodinamista)",
+        "clave": "Suarez2026*",
+        "nombre_completo": "DR. MARTIN SUÁREZ ARÁMBULA",
+        "especialidad": "MÉDICO INTERNISTA - CARDIÓLOGO HEMODINAMISTA",
+        "registro": "RM 13491094"
+    },
+    {
+        "id": "dra.cardio",
+        "etiqueta": "Dra. Paola Figueroa (Cardióloga)",
         "clave": "Cardio2026*",
         "nombre_completo": "DRA. PAOLA FIGUEROA",
         "especialidad": "MÉDICO ESPECIALISTA EN CARDIOLOGÍA",
         "registro": "RM 52.890.123 SDS"
     },
-    "admin": {
-        "etiqueta": "⚙️ Administrador General del Sistema",
+    {
+        "id": "admin",
+        "etiqueta": "Administración del Sistema",
         "clave": "HolterClaveSegura123",
-        "nombre_completo": "DR. MARTIN SUÁREZ ARÁMBULA",
-        "especialidad": "MÉDICO INTERNISTA - CARDIÓLOGO HEMODINAMISTA",
-        "registro": "RM 13491094"
+        "nombre_completo": "DR. WILLIAM AMAYA RAMIREZ",
+        "especialidad": "INTERNISTA - CARDIÓLOGO",
+        "registro": "RM 79.502.624 SDS"
     }
-}
+]
+
+PERFILES_POR_ID = {m["id"]: m for m in LISTA_ESPECIALISTAS}
+OPCIONES_NOMBRES = [m["etiqueta"] for m in LISTA_ESPECIALISTAS]
 
 if "autenticado" not in st.session_state:
     st.session_state.autenticado = False
@@ -207,39 +248,36 @@ def cerrar_sesion():
     st.session_state.autenticado = False
     st.session_state.usuario_actual = ""
 
-# PANTALLA DE ACCESO REFORMULADA Y CENTRADA
+# PANTALLA DE INICIO CON EL DISEÑO DE CENCARDIO
 if not st.session_state.autenticado:
-    col_v1, col_center, col_v2 = st.columns([1, 2.2, 1])
+    col_izq, col_central, col_der = st.columns([1, 1.8, 1])
     
-    with col_center:
-        st.markdown("""
-            <div class="login-box">
-                <div style="text-align: center; margin-bottom: 1.5rem;">
-                    <div style="font-size: 2.6rem; margin-bottom: 0.3rem;">🫀</div>
-                    <div style="color: #0c4a6e; font-size: 1.35rem; font-weight: 800; line-height: 1.3; text-transform: uppercase;">
-                        CENTRO CARDIOVASCULAR COLOMBIANO CENCARDIO
-                    </div>
-                    <div style="color: #0284c7; font-size: 0.95rem; font-weight: 600; margin-top: 0.4rem;">
-                        Portal Médico de Interpretación y Lectura Holter
-                    </div>
-                </div>
-        """, unsafe_allow_html=True)
+    with col_central:
+        logo_data = obtener_logo_b64()
+        
+        logo_html = f'<img src="{logo_data}" class="cencardio-logo-img" alt="Cencardio Logo">' if logo_data else '<div style="font-size:3rem; margin-bottom:0.4rem;">🫀</div>'
 
-        opciones_selector = {datos["etiqueta"]: usuario_key for usuario_key, datos in PERFILES_MEDICOS.items()}
+        st.markdown(f"""
+            <div class="cencardio-card">
+                {logo_html}
+                <div class="cencardio-title">Centro Cardiovascular Colombiano</div>
+                <div class="cencardio-sub">CENCARDIO · Lectura de Holter</div>
+        """, unsafe_allow_html=True)
 
         with st.form("form_login"):
             seleccion_etiqueta = st.selectbox(
                 "Especialista Responsable:",
-                options=list(opciones_selector.keys())
+                options=OPCIONES_NOMBRES,
+                index=0  # Garantiza que el Dr. William Amaya aparezca preseleccionado siempre
             )
             clave = st.text_input("Contraseña de Acceso:", type="password")
-            boton_ingresar = st.form_submit_button("Ingresar al Portal", type="primary", use_container_width=True)
+            boton_ingresar = st.form_submit_button("Ingresar al Portal", use_container_width=True)
 
             if boton_ingresar:
-                usuario_id = opciones_selector[seleccion_etiqueta]
-                if PERFILES_MEDICOS[usuario_id]["clave"] == clave:
+                medico_seleccionado = next(m for m in LISTA_ESPECIALISTAS if m["etiqueta"] == seleccion_etiqueta)
+                if medico_seleccionado["clave"] == clave:
                     st.session_state.autenticado = True
-                    st.session_state.usuario_actual = usuario_id
+                    st.session_state.usuario_actual = medico_seleccionado["id"]
                     st.rerun()
                 else:
                     st.error("❌ Contraseña incorrecta para el especialista seleccionado.")
@@ -248,28 +286,44 @@ if not st.session_state.autenticado:
 
     st.stop()
 
-perfil_activo = PERFILES_MEDICOS[st.session_state.usuario_actual]
+perfil_activo = PERFILES_POR_ID[st.session_state.usuario_actual]
 
 # ==========================================
 # 2. MOTOR CLÍNICO SPACELABS
 # ==========================================
 with st.sidebar:
+    logo_data_sidebar = obtener_logo_b64()
+    if logo_data_sidebar:
+        st.markdown(f'<div style="text-align:center; margin-bottom:1rem;"><img src="{logo_data_sidebar}" style="max-width:140px;"></div>', unsafe_allow_html=True)
+    
     st.write(f"👤 Especialista: **{perfil_activo['nombre_completo']}**")
     st.caption(f"{perfil_activo['especialidad']}\n{perfil_activo['registro']}")
     if st.button("Cerrar Sesión", use_container_width=True):
         cerrar_sesion()
         st.rerun()
     st.divider()
-    st.caption("CENCARDIO - Sistema Clínico Integral v5.5")
+    st.caption("CENCARDIO · Plataforma Médica v6.0")
 
-st.markdown("""
-    <div style="margin-bottom: 1rem;">
-        <h1 style="margin: 0; font-size: 1.9rem;">🫀 CENTRO CARDIOVASCULAR COLOMBIANO CENCARDIO</h1>
-        <p style="color: #0369a1; font-weight: 600; margin-top: 0.2rem; font-size: 1.05rem;">
-            Sistema de Lectura Automatizada y Generación de Informes Holter Spacelabs
-        </p>
-    </div>
-""", unsafe_allow_html=True)
+# ENCABEZADO SUPERIOR LIMPIO
+c_head1, c_head2 = st.columns([1, 6])
+with c_head1:
+    if logo_data_sidebar:
+        st.image(logo_data_sidebar, width=105)
+    else:
+        st.markdown("<div style='font-size:2.8rem;'>🫀</div>", unsafe_allow_html=True)
+with c_head2:
+    st.markdown("""
+        <div style="padding-top: 5px;">
+            <div style="font-size: 1.65rem; font-weight: 800; color: #13325b; line-height: 1.2;">
+                CENTRO CARDIOVASCULAR COLOMBIANO CENCARDIO
+            </div>
+            <div style="font-size: 0.95rem; font-weight: 600; color: #c8102e; text-transform: uppercase;">
+                Sistema Profesional de Interpretación Holter Spacelabs
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
+
+st.write("")
 
 tab_procesar, tab_historial = st.tabs(["📥 Procesar Nuevo Estudio", "📁 Archivo Clínico e Historial"])
 
