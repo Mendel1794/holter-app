@@ -126,7 +126,7 @@ PERFILES_MEDICOS = {
     "dr.amaya": {
         "clave": "Cardio2025*",
         "nombre_completo": "DR. WILLIAM AMAYA RAMIREZ",
-        "especialidad": "INTERNISTA - CARDIÓLOGO",
+        "especialidad": "MÉDICO INTERNISTA - CARDIÓLOGO HEMODINAMISTA",
         "registro": "RM 79.502.624 SDS"
     },
     "dra.cardio": {
