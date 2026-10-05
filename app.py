@@ -117,6 +117,12 @@ st.markdown("""
 # 1. PERFILES MÉDICOS Y ACCESO
 # ==========================================
 PERFILES_MEDICOS = {
+    "dr.suarez": {
+        "clave": "Suarez2026*",
+        "nombre_completo": "DR. MARTIN SUÁREZ ARÁMBULA",
+        "especialidad": "MÉDICO INTERNISTA - CARDIÓLOGO HEMODINAMISTA",
+        "registro": "RM 13491094"
+    },
     "dr.amaya": {
         "clave": "Cardio2025*",
         "nombre_completo": "DR. WILLIAM AMAYA RAMIREZ",
@@ -131,9 +137,9 @@ PERFILES_MEDICOS = {
     },
     "admin": {
         "clave": "HolterClaveSegura123",
-        "nombre_completo": "DR. WILLIAM AMAYA RAMIREZ",
-        "especialidad": "INTERNISTA - CARDIÓLOGO",
-        "registro": "RM 79.502.624 SDS"
+        "nombre_completo": "DR. MARTIN SUÁREZ ARÁMBULA",
+        "especialidad": "MÉDICO INTERNISTA - CARDIÓLOGO HEMODINAMISTA",
+        "registro": "RM 13491094"
     }
 }
 
@@ -175,7 +181,7 @@ with st.sidebar:
         cerrar_sesion()
         st.rerun()
     st.divider()
-    st.caption("CENCARDIO - Sistema Clínico Integral v5.0")
+    st.caption("CENCARDIO - Sistema Clínico Integral v5.1")
 
 st.title("🫀 Lectura de Holter Cencardio")
 
