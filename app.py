@@ -1,6 +1,7 @@
 import streamlit as st
 from pypdf import PdfReader
 import fitz  # PyMuPDF
+from PIL import Image
 import re
 import base64
 import os
@@ -13,6 +14,63 @@ st.set_page_config(
     page_icon="🫀",
     layout="wide"
 )
+
+# ==========================================
+# GESTIÓN Y LIMPIEZA AUTOMÁTICA DE FIRMAS
+# ==========================================
+@st.cache_data
+def procesar_firma_transparente():
+    """Toma el PDF de la firma, quita el fondo, limpia trazos y la deja lista en memoria."""
+    posibles_archivos = [
+        "OR WILIAM ANDA RAMIREZ.pdf",
+        "firma_amaya.pdf",
+        "firma_amaya.png"
+    ]
+    
+    archivo_encontrado = None
+    for nombre in posibles_archivos:
+        if os.path.exists(nombre):
+            archivo_encontrado = nombre
+            break
+            
+    if not archivo_encontrado:
+        return None
+
+    try:
+        if archivo_encontrado.lower().endswith(".pdf"):
+            doc_firma = fitz.open(archivo_encontrado)
+            # Renderizar a 300 DPI para máxima nitidez
+            pix = doc_firma[0].get_pixmap(dpi=300)
+            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            doc_firma.close()
+        else:
+            img = Image.open(archivo_encontrado)
+
+        # Convertir a RGBA y transparentar fondo
+        img = img.convert("RGBA")
+        datos_pixeles = img.getdata()
+        nuevos_pixeles = []
+
+        for p in datos_pixeles:
+            # Fondo blanco o grisáceo del escáner -> Transparente
+            if p[0] > 185 and p[1] > 185 and p[2] > 185:
+                nuevos_pixeles.append((255, 255, 255, 0))
+            else:
+                # Tinta institucional nítida (Azul Cencardio profundo)
+                nuevos_pixeles.append((19, 50, 91, 255))
+
+        img.putdata(nuevos_pixeles)
+
+        # Recortar márgenes vacíos sobrantes
+        caja = img.getbbox()
+        if caja:
+            img = img.crop(caja)
+
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
+    except Exception:
+        return None
 
 # ==========================================
 # UTILIDAD: CARGA DE RECURSOS E IMÁGENES
@@ -61,7 +119,6 @@ st.markdown(cargar_fondo(), unsafe_allow_html=True)
 
 st.markdown("""
     <style>
-    /* Ocultar elementos predeterminados de Streamlit */
     header[data-testid="stHeader"] {
         background: transparent !important;
     }
@@ -78,7 +135,6 @@ st.markdown("""
         padding: 0 !important;
     }
 
-    /* Tarjeta de Inicio Institucional CENCARDIO */
     .cencardio-card {
         background: #ffffff;
         border: 1px solid #e2e8f0;
@@ -113,7 +169,6 @@ st.markdown("""
         margin-bottom: 1.8rem;
     }
 
-    /* Tipografía clínica */
     h1 { color: #13325b !important; font-weight: 800 !important; }
     h2, h3 { color: #1b365d !important; }
     [data-testid="stMetricValue"] { color: #13325b !important; font-weight: 700; }
@@ -150,7 +205,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# BASE DE DATOS LOCAL (HISTORIAL CLÍNICO)
+# BASE DE DATOS LOCAL
 # ==========================================
 def init_db():
     conn = sqlite3.connect("historial_holter.db")
@@ -199,7 +254,7 @@ def eliminar_estudio_db(estudio_id):
     conn.close()
 
 # ==========================================
-# 1. PERFILES MÉDICOS Y SELECTOR (DR. AMAYA PRESELECCIONADO)
+# 1. PERFILES MÉDICOS Y SELECTOR
 # ==========================================
 LISTA_ESPECIALISTAS = [
     {
@@ -248,13 +303,12 @@ def cerrar_sesion():
     st.session_state.autenticado = False
     st.session_state.usuario_actual = ""
 
-# PANTALLA DE INICIO CON EL DISEÑO DE CENCARDIO
+# PANTALLA DE ACCESO
 if not st.session_state.autenticado:
     col_izq, col_central, col_der = st.columns([1, 1.8, 1])
     
     with col_central:
         logo_data = obtener_logo_b64()
-        
         logo_html = f'<img src="{logo_data}" class="cencardio-logo-img" alt="Cencardio Logo">' if logo_data else '<div style="font-size:3rem; margin-bottom:0.4rem;">🫀</div>'
 
         st.markdown(f"""
@@ -268,7 +322,7 @@ if not st.session_state.autenticado:
             seleccion_etiqueta = st.selectbox(
                 "Especialista Responsable:",
                 options=OPCIONES_NOMBRES,
-                index=0  # Garantiza que el Dr. William Amaya aparezca preseleccionado siempre
+                index=0
             )
             clave = st.text_input("Contraseña de Acceso:", type="password")
             boton_ingresar = st.form_submit_button("Ingresar al Portal", use_container_width=True)
@@ -298,13 +352,17 @@ with st.sidebar:
     
     st.write(f"👤 Especialista: **{perfil_activo['nombre_completo']}**")
     st.caption(f"{perfil_activo['especialidad']}\n{perfil_activo['registro']}")
+    
+    firma_disponible = procesar_firma_transparente()
+    if firma_disponible and perfil_activo["id"] in ["dr.amaya", "admin"]:
+        st.success("🖋️ Sello digitalizado cargado.")
+        
     if st.button("Cerrar Sesión", use_container_width=True):
         cerrar_sesion()
         st.rerun()
     st.divider()
-    st.caption("CENCARDIO · Plataforma Médica v6.0")
+    st.caption("CENCARDIO · Plataforma Médica v6.2")
 
-# ENCABEZADO SUPERIOR LIMPIO
 c_head1, c_head2 = st.columns([1, 6])
 with c_head1:
     if logo_data_sidebar:
@@ -498,7 +556,10 @@ def redactar_interpretacion(d, perfil):
 
     return informe
 
-def inyectar_y_generar_preview(pdf_bytes, texto_informe):
+# ==========================================
+# 3. INYECCIÓN DEL TEXTO Y ESTAMPADO DE FIRMA
+# ==========================================
+def inyectar_y_generar_preview(pdf_bytes, texto_informe, estampador_activo=False):
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     pagina1 = doc[0]
 
@@ -544,6 +605,18 @@ def inyectar_y_generar_preview(pdf_bytes, texto_informe):
                     color=(0, 0, 0)
                 )
                 y_cursor += 9.5
+
+    # ESTAMPAR FIRMA SI ESTÁ ACTIVA
+    firma_png_bytes = procesar_firma_transparente()
+    if firma_png_bytes and estampador_activo:
+        if rects_f:
+            # Ubicar encima de la línea punteada "Firma del médico"
+            fx0 = rects_f[0].x0 + 10
+            fy0 = rects_f[0].y0 - 58
+            fx1 = fx0 + 155
+            fy1 = rects_f[0].y0 + 4
+            rect_firma = fitz.Rect(fx0, fy0, fx1, fy1)
+            pagina1.insert_image(rect_firma, stream=firma_png_bytes)
 
     pix = pagina1.get_pixmap(dpi=150)
     img_preview = pix.tobytes("png")
@@ -593,7 +666,9 @@ with tab_procesar:
                 height=350
             )
 
-            pdf_final, img_preview = inyectar_y_generar_preview(bytes_originales, informe_para_grabar)
+            # Estampar firma digital si el especialista es Dr. Amaya o Admin
+            debe_estampar = perfil_activo["id"] in ["dr.amaya", "admin"]
+            pdf_final, img_preview = inyectar_y_generar_preview(bytes_originales, informe_para_grabar, estampador_activo=debe_estampar)
 
             col_btn1, col_btn2 = st.columns([1, 1])
             with col_btn1:
@@ -648,7 +723,7 @@ with tab_historial:
             
             if busqueda.lower() in pac_nom.lower():
                 nom_archivo_copia = normalizar_nombre_archivo(pac_nom)
-                with st.expander(f"👤 {pac_nom} | 📅 {fecha} | 👨‍⚕️ {med}"):
+                with st.expander(f"👤 {pac_nom} | 📅 {fecha} | 👨‍⚕️️ {med}"):
                     c_det1, c_det2, c_desc, c_del = st.columns([2, 2, 2, 1.5])
                     c_det1.write(f"**FC Media:** {fc} lpm")
                     c_det2.write(f"**SDNN 24h:** {sdnn} ms")
