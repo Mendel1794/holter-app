@@ -9,7 +9,7 @@ import sqlite3
 from datetime import datetime
 
 st.set_page_config(
-    page_title="Lectura de Holter Cencardio",
+    page_title="Centro Cardiovascular Colombiano Cencardio",
     page_icon="🫀",
     layout="wide"
 )
@@ -83,7 +83,7 @@ def cargar_fondo():
             return f"""
             <style>
             .stApp {{
-                background-image: linear-gradient(rgba(255, 255, 255, 0.90), rgba(255, 255, 255, 0.90)), 
+                background-image: linear-gradient(rgba(240, 248, 252, 0.90), rgba(240, 248, 252, 0.90)), 
                                   url("data:image/{mime};base64,{b64}");
                 background-size: cover;
                 background-position: center;
@@ -99,11 +99,49 @@ def cargar_fondo():
 
 st.markdown(cargar_fondo(), unsafe_allow_html=True)
 
+# ==========================================
+# LIMPIEZA DE INTERFAZ Y ESTILOS AVANZADOS
+# ==========================================
 st.markdown("""
     <style>
-    h1 { color: #0c4a6e !important; font-weight: 700 !important; }
+    /* 1. Eliminar franjas y recuadros superiores de Streamlit */
+    header[data-testid="stHeader"] {
+        background-color: transparent !important;
+    }
+    div[data-testid="stDecoration"] {
+        display: none !important;
+    }
+    .block-container {
+        padding-top: 2rem !important;
+        padding-bottom: 3rem !important;
+    }
+
+    /* 2. Eliminar el borde rígido que Streamlit le pone a los formularios */
+    div[data-testid="stForm"] {
+        border: none !important;
+        padding: 0 !important;
+    }
+
+    /* 3. Tarjeta de Login limpia y profesional */
+    .login-box {
+        background: rgba(255, 255, 255, 0.95);
+        border: 1px solid rgba(203, 213, 225, 0.8);
+        border-radius: 16px;
+        padding: 2.5rem;
+        box-shadow: 0 10px 25px -5px rgba(12, 74, 110, 0.12);
+        max-width: 580px;
+        margin: 1rem auto;
+    }
+
+    /* 4. Tipografías y botones clínicos */
+    h1 {
+        color: #0c4a6e !important;
+        font-weight: 800 !important;
+        letter-spacing: -0.5px;
+    }
     h2, h3 { color: #0369a1 !important; }
     [data-testid="stMetricValue"] { color: #0284c7 !important; font-weight: 700; }
+    
     .stButton > button {
         border-radius: 8px;
         font-weight: 600;
@@ -122,15 +160,6 @@ st.markdown("""
         box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
         background: white;
         padding: 6px;
-    }
-    .login-card {
-        background: rgba(255, 255, 255, 0.95);
-        border: 1px solid #cbd5e1;
-        padding: 2.2rem;
-        border-radius: 14px;
-        box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
-        max-width: 520px;
-        margin: auto;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -178,17 +207,24 @@ def cerrar_sesion():
     st.session_state.autenticado = False
     st.session_state.usuario_actual = ""
 
-# PANTALLA DE ACCESO CON SELECTOR ELEGANTE
+# PANTALLA DE ACCESO REFORMULADA Y CENTRADA
 if not st.session_state.autenticado:
-    col_v1, col_center, col_v2 = st.columns([1, 2, 1])
+    col_v1, col_center, col_v2 = st.columns([1, 2.2, 1])
     
     with col_center:
-        st.markdown('<div class="login-card">', unsafe_allow_html=True)
-        st.title("🫀 CEN CARDIO")
-        st.subheader("Portal de Lectura e Interpretación Holter")
-        st.caption("Selecciona tu perfil médico autorizado para ingresar.")
+        st.markdown("""
+            <div class="login-box">
+                <div style="text-align: center; margin-bottom: 1.5rem;">
+                    <div style="font-size: 2.6rem; margin-bottom: 0.3rem;">🫀</div>
+                    <div style="color: #0c4a6e; font-size: 1.35rem; font-weight: 800; line-height: 1.3; text-transform: uppercase;">
+                        CENTRO CARDIOVASCULAR COLOMBIANO CENCARDIO
+                    </div>
+                    <div style="color: #0284c7; font-size: 0.95rem; font-weight: 600; margin-top: 0.4rem;">
+                        Portal Médico de Interpretación y Lectura Holter
+                    </div>
+                </div>
+        """, unsafe_allow_html=True)
 
-        # Opciones para el desplegable
         opciones_selector = {datos["etiqueta"]: usuario_key for usuario_key, datos in PERFILES_MEDICOS.items()}
 
         with st.form("form_login"):
@@ -197,7 +233,7 @@ if not st.session_state.autenticado:
                 options=list(opciones_selector.keys())
             )
             clave = st.text_input("Contraseña de Acceso:", type="password")
-            boton_ingresar = st.form_submit_button("Ingresar al Sistema", type="primary", use_container_width=True)
+            boton_ingresar = st.form_submit_button("Ingresar al Portal", type="primary", use_container_width=True)
 
             if boton_ingresar:
                 usuario_id = opciones_selector[seleccion_etiqueta]
@@ -224,9 +260,16 @@ with st.sidebar:
         cerrar_sesion()
         st.rerun()
     st.divider()
-    st.caption("CENCARDIO - Sistema Clínico Integral v5.4")
+    st.caption("CENCARDIO - Sistema Clínico Integral v5.5")
 
-st.title("🫀 Lectura de Holter Cencardio")
+st.markdown("""
+    <div style="margin-bottom: 1rem;">
+        <h1 style="margin: 0; font-size: 1.9rem;">🫀 CENTRO CARDIOVASCULAR COLOMBIANO CENCARDIO</h1>
+        <p style="color: #0369a1; font-weight: 600; margin-top: 0.2rem; font-size: 1.05rem;">
+            Sistema de Lectura Automatizada y Generación de Informes Holter Spacelabs
+        </p>
+    </div>
+""", unsafe_allow_html=True)
 
 tab_procesar, tab_historial = st.tabs(["📥 Procesar Nuevo Estudio", "📁 Archivo Clínico e Historial"])
 
@@ -249,7 +292,6 @@ def extraer_datos_spacelabs(pdf_bytes, filename=""):
 
     datos = {}
 
-    # Detección del nombre del paciente
     nombre_detectado = None
     m_nom = re.search(r"([A-ZÁÉÍÓÚÑ\s]{3,50},\s*[A-ZÁÉÍÓÚÑ\s]{3,50})[\s\n]+(?:No confirmado|Confirmado)?[\s\n]*Informe Holter", texto)
     if m_nom:
@@ -274,7 +316,6 @@ def extraer_datos_spacelabs(pdf_bytes, filename=""):
 
     datos["paciente"] = nombre_detectado if nombre_detectado else "PACIENTE"
 
-    # Frecuencia cardíaca
     fc_p = re.search(r"Prom\.?\s*(\d{2,3})", texto)
     datos["fc_prom"] = int(fc_p.group(1)) if fc_p else 70
 
@@ -284,11 +325,9 @@ def extraer_datos_spacelabs(pdf_bytes, filename=""):
     fc_min = re.search(r"M[íi]n\s*(\d{2,3})", texto)
     datos["fc_min"] = int(fc_min.group(1)) if fc_min else 55
 
-    # Pausas
     pausa_match = re.search(r"\bPausa\s+(\d+)", texto)
     datos["pausas"] = int(pausa_match.group(1)) if pausa_match else 0
 
-    # Arritmias Ventriculares
     ev_m = re.search(r"Latidos ventriculares\s*:\s*([\d\.]+)", texto)
     datos["ev_total"] = limpiar_numero(ev_m.group(1)) if ev_m else 0
 
@@ -301,14 +340,12 @@ def extraer_datos_spacelabs(pdf_bytes, filename=""):
     big_m = re.search(r"Bigeminismo\s+([\d\.]+)", texto)
     datos["bigeminismo"] = limpiar_numero(big_m.group(1)) if big_m else 0
 
-    # Arritmias Supraventriculares
     esv_m = re.search(r"Latidos supraventriculares\s*:\s*([\d\.]+)", texto)
     datos["esv_total"] = limpiar_numero(esv_m.group(1)) if esv_m else 0
 
     tsv_m = re.search(r"\bTSV\s+([\d\.]+)", texto)
     datos["tsv_episodios"] = limpiar_numero(tsv_m.group(1)) if tsv_m else 0
 
-    # Segmento ST
     st_m = re.search(r"Depresi[óo]n ST\s+(\d+)\s+(-?[\d,\.]+)\s+([^\n]+)", texto)
     if st_m:
         datos["st_episodios"] = int(st_m.group(1))
@@ -318,11 +355,9 @@ def extraer_datos_spacelabs(pdf_bytes, filename=""):
         datos["st_episodios"] = int(st_alt.group(1)) if st_alt else 0
         datos["st_desviacion"] = "0"
 
-    # SDNN 24 Horas
     sdnn_m = re.search(r"Valor de 24 horas\s+[\d\.]+\s+([\d\.]+)", texto)
     datos["sdnn_24h"] = int(sdnn_m.group(1)) if sdnn_m else 85
 
-    # QTc
     qtc_m = re.search(r"Todos los per[íi]odos\s+[\d\.]+\s+[\d\.]+\s+([\d\.]+)", texto)
     datos["qtc_prom"] = int(qtc_m.group(1)) if qtc_m else 400
 
@@ -528,7 +563,6 @@ with tab_procesar:
                     )
                     st.success(f"✅ Guardado con éxito: {nombre_confirmado}")
 
-            # Botón de descarte / limpieza rápida si el estudio no era el deseado
             st.write("")
             if st.button("🔄 Descartar / Limpiar Estudio Actual", use_container_width=True):
                 if "datos_actuales" in st.session_state:
