@@ -1,9 +1,10 @@
 import streamlit as st
 from pypdf import PdfReader
-import fitz  # PyMuPDF para inyectar texto en el PDF original
+import fitz  # PyMuPDF
 import re
 import base64
 import os
+import io
 
 st.set_page_config(
     page_title="Lectura de Holter Cencardio",
@@ -103,10 +104,10 @@ with st.sidebar:
         cerrar_sesion()
         st.rerun()
     st.divider()
-    st.caption("CENCARDIO - Sistema de Generación PDF v3.0")
+    st.caption("CENCARDIO - Sistema Spacelabs v3.2")
 
 st.title("🫀 Lectura de Holter Cencardio")
-st.write("Carga el PDF del equipo Spacelabs. El sistema extraerá los datos y estampará la lectura directamente en el recuadro oficial de Hallazgos.")
+st.write("Carga el archivo PDF de Spacelabs para generar la lectura clínica individualizada.")
 
 uploaded_file = st.file_uploader("Cargar estudio Holter (PDF)", type=["pdf"])
 
@@ -119,8 +120,8 @@ def limpiar_numero(val_str):
     except:
         return 0
 
-def extraer_datos_spacelabs(archivo_pdf):
-    reader = PdfReader(archivo_pdf)
+def extraer_datos_spacelabs(pdf_bytes):
+    reader = PdfReader(io.BytesIO(pdf_bytes))
     texto = ""
     for page in reader.pages:
         t = page.extract_text()
@@ -129,14 +130,12 @@ def extraer_datos_spacelabs(archivo_pdf):
 
     datos = {}
 
-    # Paciente
     paciente_match = re.search(r"ID paciente:.*?\n([A-ZÁÉÍÓÚÑ\s,]+)\nInforme Holter", texto)
     if paciente_match:
         datos["paciente"] = paciente_match.group(1).replace("\n", " ").strip()
     else:
         datos["paciente"] = "Paciente_Estudio"
 
-    # FC
     fc_p = re.search(r"Prom\.?\s*(\d{2,3})", texto)
     datos["fc_prom"] = int(fc_p.group(1)) if fc_p else 70
 
@@ -146,11 +145,9 @@ def extraer_datos_spacelabs(archivo_pdf):
     fc_min = re.search(r"M[íi]n\s*(\d{2,3})", texto)
     datos["fc_min"] = int(fc_min.group(1)) if fc_min else 55
 
-    # Pausas
     pausa_match = re.search(r"\bPausa\s+(\d+)", texto)
     datos["pausas"] = int(pausa_match.group(1)) if pausa_match else 0
 
-    # Arritmias Ventriculares
     ev_m = re.search(r"Latidos ventriculares\s*:\s*([\d\.]+)", texto)
     datos["ev_total"] = limpiar_numero(ev_m.group(1)) if ev_m else 0
 
@@ -163,14 +160,12 @@ def extraer_datos_spacelabs(archivo_pdf):
     big_m = re.search(r"Bigeminismo\s+([\d\.]+)", texto)
     datos["bigeminismo"] = limpiar_numero(big_m.group(1)) if big_m else 0
 
-    # Arritmias Supraventriculares
     esv_m = re.search(r"Latidos supraventriculares\s*:\s*([\d\.]+)", texto)
     datos["esv_total"] = limpiar_numero(esv_m.group(1)) if esv_m else 0
 
     tsv_m = re.search(r"\bTSV\s+([\d\.]+)", texto)
     datos["tsv_episodios"] = limpiar_numero(tsv_m.group(1)) if tsv_m else 0
 
-    # Segmento ST
     st_m = re.search(r"Depresi[óo]n ST\s+(\d+)\s+(-?[\d,\.]+)\s+([^\n]+)", texto)
     if st_m:
         datos["st_episodios"] = int(st_m.group(1))
@@ -180,11 +175,9 @@ def extraer_datos_spacelabs(archivo_pdf):
         datos["st_episodios"] = int(st_alt.group(1)) if st_alt else 0
         datos["st_desviacion"] = "0"
 
-    # SDNN 24 Horas
     sdnn_m = re.search(r"Valor de 24 horas\s+[\d\.]+\s+([\d\.]+)", texto)
     datos["sdnn_24h"] = int(sdnn_m.group(1)) if sdnn_m else 85
 
-    # QTc
     qtc_m = re.search(r"Todos los per[íi]odos\s+[\d\.]+\s+[\d\.]+\s+([\d\.]+)", texto)
     datos["qtc_prom"] = int(qtc_m.group(1)) if qtc_m else 400
 
@@ -272,25 +265,60 @@ RM 79.502.624 SDS"""
     return informe
 
 # ==========================================
-# 3. INYECCIÓN DIRECTA EN EL PDF ORIGINAL
+# 3. INYECCIÓN DINÁMICA CON AUTO-FIT
 # ==========================================
 def inyectar_en_pdf_original(pdf_bytes, texto_informe):
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    pagina1 = doc[0]  # Página 1 de Spacelabs
+    pagina1 = doc[0]
 
-    # Coordenadas exactas del recuadro blanco de Hallazgos en Spacelabs:
-    # x0: 34, y0: 558, x1: 565, y1: 730
-    rect_hallazgos = fitz.Rect(34, 558, 565, 730)
+    # Búsqueda dinámica de las coordenadas del recuadro
+    rects_h = pagina1.search_for("Hallazgos:")
+    rects_f = pagina1.search_for("Firma del médico")
+    if not rects_f:
+        rects_f = pagina1.search_for("Firma del operador")
 
-    # Inyectar el texto adaptando el tamaño tipográfico
-    pagina1.insert_textbox(
-        rect_hallazgos,
-        texto_informe,
-        fontsize=7.8,
-        fontname="helv",
-        color=(0, 0, 0),
-        align=fitz.TEXT_ALIGN_LEFT
-    )
+    if rects_h and rects_f:
+        # Inicia justo debajo de la palabra "Hallazgos:"
+        x0 = rects_h[0].x0 + 2
+        y0 = rects_h[0].y1 + 4
+        # Termina antes de las líneas de firma
+        y1 = rects_f[0].y0 - 10
+        x1 = pagina1.rect.width - 36
+        rect_hallazgos = fitz.Rect(x0, y0, x1, y1)
+    else:
+        # Coordenadas de respaldo si no encuentra el texto base
+        rect_hallazgos = fitz.Rect(35, 510, 565, 730)
+
+    # Auto-escalado de fuente: inicia en 8.2 y desciende hasta encajar con holgura
+    font_size = 8.2
+    exito = False
+    while font_size >= 4.5:
+        rc = pagina1.insert_textbox(
+            rect_hallazgos,
+            texto_informe,
+            fontsize=font_size,
+            fontname="helv",
+            color=(0, 0, 0),
+            align=fitz.TEXT_ALIGN_LEFT
+        )
+        if rc >= 0:
+            exito = True
+            break
+        font_size -= 0.3
+
+    # Respaldo secundario si el texto supera la capacidad del bloque
+    if not exito:
+        y_cursor = rect_hallazgos.y0
+        for linea in texto_informe.split("\n"):
+            if y_cursor < rect_hallazgos.y1:
+                pagina1.insert_text(
+                    fitz.Point(rect_hallazgos.x0, y_cursor),
+                    linea,
+                    fontsize=6.5,
+                    fontname="helv",
+                    color=(0, 0, 0)
+                )
+                y_cursor += 9.5
 
     pdf_modificado = doc.tobytes()
     doc.close()
@@ -304,7 +332,7 @@ if uploaded_file is not None:
 
     if "datos_actuales" not in st.session_state or st.session_state.get("archivo_actual") != uploaded_file.name:
         with st.spinner("Extrayendo datos de Spacelabs..."):
-            st.session_state.datos_actuales = extraer_datos_spacelabs(uploaded_file)
+            st.session_state.datos_actuales = extraer_datos_spacelabs(bytes_originales)
             st.session_state.texto_informe = redactar_interpretacion(st.session_state.datos_actuales)
             st.session_state.archivo_actual = uploaded_file.name
 
@@ -312,7 +340,6 @@ if uploaded_file is not None:
 
     st.success("✅ Estudio procesado. Revisa los datos y ajusta el informe si es necesario:")
 
-    # Tarjetas de verificación clínica
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("FC Promedio", f"{datos['fc_prom']} lpm", f"Mín {datos['fc_min']} | Máx {datos['fc_max']}")
     c2.metric("Ectopias Ventriculares", f"{datos['ev_total']} EV", f"TV: {datos['tv_episodios']}")
@@ -326,7 +353,6 @@ if uploaded_file is not None:
         height=320
     )
 
-    # Generación y descarga directa del PDF
     pdf_final = inyectar_en_pdf_original(bytes_originales, informe_para_grabar)
 
     st.download_button(
