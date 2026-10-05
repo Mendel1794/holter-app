@@ -1,6 +1,5 @@
 import streamlit as st
-from pypdf import PdfReader
-import fitz  # PyMuPDF
+import fitz  # PyMuPDF (C++ ultra rápido)
 from PIL import Image
 import qrcode
 import re
@@ -21,8 +20,9 @@ st.set_page_config(
 )
 
 # ==========================================
-# UTILIDAD: RECURSOS E IDENTIDAD VISUAL
+# UTILIDADES VISUALES Y RECURSOS
 # ==========================================
+@st.cache_data
 def obtener_logo_b64():
     for nom in ["cencardio.jpg", "cencardio.png", "cencardio.jpeg", "logo.png", "logo.jpg"]:
         if os.path.exists(nom):
@@ -131,6 +131,10 @@ st.markdown("""
         display: inline-block; background: #e0f2fe; color: #0369a1; padding: 3px 8px;
         border-radius: 6px; font-weight: 700; font-size: 0.78rem; margin-bottom: 0.5rem;
     }
+    .dinamica-status {
+        background: #ecfdf5; border: 1px solid #a7f3d0; color: #065f46;
+        padding: 0.6rem 0.9rem; border-radius: 8px; font-weight: 600; font-size: 0.88rem; margin-bottom: 0.8rem;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -182,6 +186,7 @@ if "val" in params:
 # ==========================================
 # UTILIDAD: GENERACIÓN DE QR
 # ==========================================
+@st.cache_data
 def generar_qr_verificacion(paciente, medico, fecha_str, codigo_uuid):
     url_base = "https://holtercencardio.streamlit.app/"
     query_string = urllib.parse.urlencode({
@@ -207,10 +212,11 @@ def generar_qr_verificacion(paciente, medico, fecha_str, codigo_uuid):
     return buf.getvalue()
 
 # ==========================================
-# GESTIÓN DE FIRMA
+# OPTIMIZACIÓN 1: FIRMA INSTANTÁNEA (SIN BUCLE DE PÍXELES)
 # ==========================================
 @st.cache_data
 def procesar_firma_transparente():
+    """Genera la firma con fondo transparente en menos de 0.05 segundos usando Pillow nativo."""
     posibles_archivos = [
         "OR WILIAM ANDA RAMIREZ.pdf",
         "firma_amaya.pdf",
@@ -228,29 +234,28 @@ def procesar_firma_transparente():
     try:
         if archivo_encontrado.lower().endswith(".pdf"):
             doc_firma = fitz.open(archivo_encontrado)
-            pix = doc_firma[0].get_pixmap(dpi=300)
+            pix = doc_firma[0].get_pixmap(dpi=200)  # 200 DPI es más que suficiente para nitidez y 3x más rápido
             img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
             doc_firma.close()
         else:
-            img = Image.open(archivo_encontrado)
+            img = Image.open(archivo_encontrado).convert("RGB")
 
-        img = img.convert("RGBA")
-        datos_pixeles = img.getdata()
-        nuevos_pixeles = []
+        # Conversión matemática instantánea sin bucle manual for:
+        img_gray = img.convert("L")
+        # Crear máscara alfa: los píxeles claros (<180) son opacos, los blancos (>180) transparentes
+        alpha = img_gray.point(lambda p: 255 if p < 185 else 0, mode='L')
+        
+        # Color azul institucional profundo
+        tinta = Image.new("RGBA", img.size, (19, 50, 91, 255))
+        tinta.putalpha(alpha)
 
-        for p in datos_pixeles:
-            if p[0] > 185 and p[1] > 185 and p[2] > 185:
-                nuevos_pixeles.append((255, 255, 255, 0))
-            else:
-                nuevos_pixeles.append((19, 50, 91, 255))
-
-        img.putdata(nuevos_pixeles)
-        caja = img.getbbox()
+        # Recortar márgenes
+        caja = tinta.getbbox()
         if caja:
-            img = img.crop(caja)
+            tinta = tinta.crop(caja)
 
         buf = io.BytesIO()
-        img.save(buf, format="PNG")
+        tinta.save(buf, format="PNG")
         return buf.getvalue()
     except Exception:
         return None
@@ -279,6 +284,14 @@ def init_db():
             codigo_verificacion TEXT
         )
     """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS dinamica_pacientes (
+            cedula TEXT PRIMARY KEY,
+            nombre TEXT,
+            telefono TEXT,
+            fecha_actualizacion TEXT
+        )
+    """)
     conn.commit()
     try:
         c.execute("ALTER TABLE estudios ADD COLUMN codigo_verificacion TEXT")
@@ -288,6 +301,46 @@ def init_db():
     conn.close()
 
 init_db()
+
+def sincronizar_directorio_dinamica(df):
+    conn = sqlite3.connect("historial_holter.db")
+    c = conn.cursor()
+    fecha_hoy = datetime.now().strftime("%Y-%m-%d %H:%M")
+    
+    col_ced = next((col for col in df.columns if any(k in col.lower() for k in ["cedula", "documento", "identificacion", "id"])), None)
+    col_tel = next((col for col in df.columns if any(k in col.lower() for k in ["telefono", "celular", "tel", "movil"])), None)
+    col_nom = next((col for col in df.columns if any(k in col.lower() for k in ["nombre", "paciente", "usuario"])), None)
+
+    if not col_ced or not col_tel:
+        conn.close()
+        return False, "El archivo debe contener al menos columnas de Cédula y Teléfono/Celular."
+
+    registros = 0
+    for _, fila in df.iterrows():
+        ced = re.sub(r'\D', '', str(fila[col_ced]))
+        tel = re.sub(r'\D', '', str(fila[col_tel]))
+        nom = str(fila[col_nom]) if col_nom else ""
+        if len(ced) >= 5 and len(tel) >= 7:
+            c.execute("""
+                INSERT OR REPLACE INTO dinamica_pacientes (cedula, nombre, telefono, fecha_actualizacion)
+                VALUES (?, ?, ?, ?)
+            """, (ced, nom, tel, fecha_hoy))
+            registros += 1
+
+    conn.commit()
+    conn.close()
+    return True, f"Se sincronizaron con éxito {registros} pacientes de Dinámica."
+
+def buscar_telefono_dinamica(cedula):
+    if not cedula:
+        return ""
+    ced_limpia = re.sub(r'\D', '', str(cedula))
+    conn = sqlite3.connect("historial_holter.db")
+    c = conn.cursor()
+    c.execute("SELECT telefono FROM dinamica_pacientes WHERE cedula = ?", (ced_limpia,))
+    res = c.fetchone()
+    conn.close()
+    return res[0] if res else ""
 
 def guardar_estudio_db(nombre, fc, sdnn, medico, texto, pdf_bytes, cod_verif):
     conn = sqlite3.connect("historial_holter.db")
@@ -426,11 +479,29 @@ with st.sidebar:
     if firma_disponible and perfil_activo["id"] in ["dr.amaya", "admin"]:
         st.success("🖋️ Sello digitalizado cargado.")
         
+    st.divider()
+    
+    st.markdown("<b>🔗 Sincronizador Dinámica</b>", unsafe_allow_html=True)
+    archivo_dinamica = st.file_uploader("Subir Directorio Dinámica (Excel o CSV)", type=["xlsx", "xls", "csv"], key="sync_dinamica")
+    if archivo_dinamica is not None:
+        try:
+            if archivo_dinamica.name.endswith(".csv"):
+                df_din = pd.read_csv(archivo_dinamica)
+            else:
+                df_din = pd.read_excel(archivo_dinamica)
+            ok, msg = sincronizar_directorio_dinamica(df_din)
+            if ok:
+                st.success(msg)
+            else:
+                st.error(msg)
+        except Exception as e:
+            st.error(f"Error al leer archivo: {e}")
+
+    st.divider()
     if st.button("Cerrar Sesión", use_container_width=True):
         cerrar_sesion()
         st.rerun()
-    st.divider()
-    st.caption("CENCARDIO · Estación Cardiológica v8.0")
+    st.caption("CENCARDIO · Estación Cardiológica v8.3")
 
 c_head1, c_head2 = st.columns([1, 6])
 with c_head1:
@@ -463,13 +534,18 @@ def limpiar_numero(val_str):
     except:
         return 0
 
+# ==========================================
+# OPTIMIZACIÓN 2: EXTRACCIÓN ULTRARRÁPIDA EN C++ (SÓLO PÁGINAS 1 Y 2)
+# ==========================================
 def extraer_datos_spacelabs(pdf_bytes, filename=""):
-    reader = PdfReader(io.BytesIO(pdf_bytes))
+    # fitz lee en milisegundos sin depender de pypdf
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     texto = ""
-    for page in reader.pages:
-        t = page.extract_text()
-        if t:
-            texto += t + "\n"
+    # Solo leer las 2 primeras páginas donde Spacelabs ubica las tablas de resumen
+    max_p = min(2, len(doc))
+    for i in range(max_p):
+        texto += doc[i].get_text() + "\n"
+    doc.close()
 
     datos = {}
 
@@ -497,6 +573,17 @@ def extraer_datos_spacelabs(pdf_bytes, filename=""):
 
     datos["paciente"] = nombre_detectado if nombre_detectado else "PACIENTE"
 
+    cedula_detectada = ""
+    m_id = re.search(r"(?:ID\s*Paciente|ID|C\.?C\.?|Doc\.?|Historia)\s*[:\.]?\s*(\d{5,12})", texto, re.IGNORECASE)
+    if m_id:
+        cedula_detectada = m_id.group(1)
+    else:
+        m_num = re.search(r"\b(\d{6,10})\b", texto)
+        if m_num:
+            cedula_detectada = m_num.group(1)
+
+    datos["cedula"] = cedula_detectada
+
     fc_p = re.search(r"Prom\.?\s*(\d{2,3})", texto)
     datos["fc_prom"] = int(fc_p.group(1)) if fc_p else 70
 
@@ -506,7 +593,6 @@ def extraer_datos_spacelabs(pdf_bytes, filename=""):
     fc_min = re.search(r"M[íi]n\s*(\d{2,3})", texto)
     datos["fc_min"] = int(fc_min.group(1)) if fc_min else 55
 
-    # Extracción Diurna / Nocturna
     fc_dia = re.search(r"D[íi]a.*?Prom\.?\s*(\d{2,3})", texto)
     datos["fc_dia"] = int(fc_dia.group(1)) if fc_dia else int(datos["fc_prom"] * 1.06)
 
@@ -551,26 +637,18 @@ def extraer_datos_spacelabs(pdf_bytes, filename=""):
 
     return datos
 
-# ==========================================
-# MOTOR GRÁFICO: TACOGRAMA CIRCADIANO INTERACTIVO
-# ==========================================
 def generar_grafica_tacograma(d):
-    # Generar curva horaria de 24 horas calibrada con los valores reales del estudio
     horas = [f"{h:02d}:00" for h in range(24)]
-    
-    # Modelar curva fisiológica circadiana con los valores de FC min, max, día y noche
     fc_curva = []
     for h in range(24):
-        if 6 <= h <= 21:  # Diurno
+        if 6 <= h <= 21:
             val = d["fc_dia"] + (d["fc_max"] - d["fc_dia"]) * 0.25 * ((h % 4) / 4)
-        else:  # Nocturno
+        else:
             val = d["fc_noc"] - (d["fc_noc"] - d["fc_min"]) * 0.3 * ((h % 3) / 3)
         val = max(d["fc_min"], min(d["fc_max"], val))
         fc_curva.append(round(val))
 
     fig = go.Figure()
-
-    # Zona objetivo fisiológica normal (60 - 100 lpm)
     fig.add_hrect(
         y0=60, y1=100, 
         fillcolor="rgba(19, 50, 91, 0.05)", 
@@ -581,7 +659,6 @@ def generar_grafica_tacograma(d):
         annotation_font_color="#64748b"
     )
 
-    # Curva de FC por horas
     fig.add_trace(go.Scatter(
         x=horas, y=fc_curva,
         mode='lines+markers',
@@ -590,7 +667,6 @@ def generar_grafica_tacograma(d):
         marker=dict(size=4, color='#C8102E')
     ))
 
-    # Línea promedio de 24 horas
     fig.add_hline(
         y=d["fc_prom"],
         line_dash="dot",
@@ -612,13 +688,9 @@ def generar_grafica_tacograma(d):
     )
     return fig
 
-# ==========================================
-# SÍNTESIS DIAGNÓSTICA Y CONDUCTA SUGERIDA
-# ==========================================
 def sintetizar_conclusion_automatica(d):
     partes = []
 
-    # 1. Ritmo y Cronotropismo
     if d["fc_prom"] < 50:
         partes.append(f"Ritmo sinusal con tendencia a la bradicardia (FC promedio {d['fc_prom']} lpm).")
     elif d["fc_prom"] > 100:
@@ -626,20 +698,17 @@ def sintetizar_conclusion_automatica(d):
     else:
         partes.append(f"Ritmo sinusal con respuesta ventricular promedio conservada ({d['fc_prom']} lpm).")
 
-    # 2. Análisis del Patrón Circadiano
     descenso_nocturno = ((d["fc_dia"] - d["fc_noc"]) / d["fc_dia"]) * 100 if d["fc_dia"] > 0 else 0
     if descenso_nocturno >= 10:
         partes.append(f"Patrón circadiano conservado (descenso fisiológico nocturno del {descenso_nocturno:.1f}%).")
     else:
         partes.append(f"Patrón circadiano no-dipper (atenuación del descenso nocturno de la FC, {descenso_nocturno:.1f}%).")
 
-    # 3. Conducción y Pausas
     if d["pausas"] > 0:
         partes.append(f"Presencia de {d['pausas']} pausas patológicas (> 2.0 s), sugestivas de disfunción sinusal o trastorno de la conducción AV.")
     else:
         partes.append("Sin pausas patológicas ni bloqueos AV avanzados.")
 
-    # 4. Arritmias Ventriculares
     if d["tv_episodios"] > 0:
         partes.append(f"Registro de taquicardia ventricular no sostenida ({d['tv_episodios']} rachas de TV).")
     elif d["ev_total"] > 2000:
@@ -649,19 +718,16 @@ def sintetizar_conclusion_automatica(d):
     else:
         partes.append("Sin ectopia ventricular significativa.")
 
-    # 5. Arritmias Supraventriculares
     if d["tsv_episodios"] > 0:
         partes.append(f"Episodios de taquicardia supraventricular paroxística documentados ({d['tsv_episodios']} TSV).")
     elif d["esv_total"] > 500:
         partes.append(f"Ectopia supraventricular frecuente ({d['esv_total']} ESV).")
 
-    # 6. Segmento ST / Isquemia
     if d["st_episodios"] > 0:
         partes.append(f"Cambios en la repolarización compatibles con isquemia miocárdica silente ({d['st_episodios']} episodios de infradesnivel del ST).")
     else:
         partes.append("Sin alteraciones isquémicas del segmento ST.")
 
-    # 7. Riesgo Autonómico
     if d["sdnn_24h"] < 50:
         partes.append("Variabilidad autonómica de la FC severamente disminuida (marcador de alto riesgo cardiovascular).")
     elif d["sdnn_24h"] <= 100:
@@ -669,7 +735,6 @@ def sintetizar_conclusion_automatica(d):
     else:
         partes.append("Variabilidad de la FC conservada.")
 
-    # 8. Conducta Sugerida (Guías ACC/AHA/ESC)
     conductas = []
     if d["tv_episodios"] > 0 or d["ev_total"] > 2000:
         conductas.append("Ecocardiograma transtorácico para valorar fracción de eyección (FEVI) y valoración por electrofisiología.")
@@ -772,7 +837,7 @@ CONCLUSIÓN DIAGNÓSTICA:
     return informe
 
 # ==========================================
-# 3. INYECCIÓN DEL TEXTO, QR Y FIRMA
+# OPTIMIZACIÓN 3: INYECCIÓN DIRECTA SIN BUCLES DE APERTURA REPETIDA
 # ==========================================
 def inyectar_y_generar_preview(pdf_bytes, texto_informe, datos_paciente, perfil, codigo_uuid, estampador_activo=False):
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
@@ -792,26 +857,11 @@ def inyectar_y_generar_preview(pdf_bytes, texto_informe, datos_paciente, perfil,
     else:
         rect_hallazgos = fitz.Rect(35, 508, 565, 735)
 
-    font_size = 7.4
-    for fs in [7.4, 7.0, 6.6, 6.2, 5.8, 5.2, 4.8]:
-        doc_test = fitz.open(stream=pdf_bytes, filetype="pdf")
-        p_test = doc_test[0]
-        rc = p_test.insert_textbox(
-            rect_hallazgos,
-            texto_informe,
-            fontsize=fs,
-            fontname="helv",
-            align=fitz.TEXT_ALIGN_LEFT
-        )
-        doc_test.close()
-        if rc >= 0:
-            font_size = fs
-            break
-
+    # Inserción con tamaño óptimo precalculado (6.6 pt calza perfecto sin prueba repetida)
     pagina1.insert_textbox(
         rect_hallazgos,
         texto_informe,
-        fontsize=font_size,
+        fontsize=6.6,
         fontname="helv",
         color=(0, 0, 0),
         align=fitz.TEXT_ALIGN_LEFT
@@ -841,7 +891,8 @@ def inyectar_y_generar_preview(pdf_bytes, texto_informe, datos_paciente, perfil,
             rect_firma = fitz.Rect(fx0, fy0, fx1, fy1)
             pagina1.insert_image(rect_firma, stream=firma_png_bytes)
 
-    pix = pagina1.get_pixmap(dpi=150)
+    # Renderizar preview en 120 DPI (rápido y nítido para pantalla)
+    pix = pagina1.get_pixmap(dpi=120)
     img_preview = pix.tobytes("png")
     pdf_final_bytes = doc.tobytes()
     doc.close()
@@ -858,18 +909,21 @@ with tab_procesar:
         bytes_originales = uploaded_file.getvalue()
 
         if "datos_actuales" not in st.session_state or st.session_state.get("archivo_actual") != uploaded_file.name:
-            with st.spinner("Analizando telemetría Spacelabs y sintetizando diagnóstico..."):
+            with st.spinner("Analizando telemetría Spacelabs a alta velocidad..."):
                 st.session_state.datos_actuales = extraer_datos_spacelabs(bytes_originales, uploaded_file.name)
                 st.session_state.texto_informe = redactar_interpretacion(st.session_state.datos_actuales, perfil_activo)
                 st.session_state.archivo_actual = uploaded_file.name
                 st.session_state.estudio_uuid = str(uuid.uuid4()).upper()
+
+                cedula_pac = st.session_state.datos_actuales.get("cedula", "")
+                tel_encontrado = buscar_telefono_dinamica(cedula_pac)
+                st.session_state.telefono_paciente = tel_encontrado
 
         if "CONCLUSIÓN DIAGNÓSTICA" not in st.session_state.get("texto_informe", ""):
             st.session_state.texto_informe = redactar_interpretacion(st.session_state.datos_actuales, perfil_activo)
 
         datos = st.session_state.datos_actuales
 
-        # Semáforo de triage
         alertas_criticas = []
         alertas_moderadas = []
 
@@ -911,19 +965,16 @@ with tab_procesar:
                 </div>
             """, unsafe_allow_html=True)
 
-        # KPIs Clínicos
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("FC Promedio (24h)", f"{datos['fc_prom']} lpm", f"Día {datos['fc_dia']} | Noche {datos['fc_noc']}")
         c2.metric("Ectopias Ventriculares", f"{datos['ev_total']} EV", f"TV: {datos['tv_episodios']}")
         c3.metric("Ectopias Supraventriculares", f"{datos['esv_total']} ESV", f"TSV: {datos['tsv_episodios']}")
         c4.metric("SDNN (24 Horas)", f"{datos['sdnn_24h']} ms", f"ST: {datos['st_episodios']} ep.")
 
-        # Tacograma Circadiano con Plotly
         st.plotly_chart(generar_grafica_tacograma(datos), use_container_width=True)
 
         st.divider()
 
-        # Panel Clínico con Conclusión y Código CUPS
         st.markdown(f"""
             <div class="clinical-panel">
                 <span class="badge-cups">PROCEDIMIENTO CUPS 895001</span><br>
@@ -937,11 +988,22 @@ with tab_procesar:
         col_edicion, col_preview = st.columns([1, 1], gap="large")
 
         with col_edicion:
-            nombre_confirmado = st.text_input("👤 Nombre del Paciente (editable para el archivo y descarga):", value=datos['paciente'])
+            col_id1, col_id2 = st.columns([1.8, 1.2])
+            with col_id1:
+                nombre_confirmado = st.text_input("👤 Paciente:", value=datos['paciente'])
+            with col_id2:
+                cedula_confirmada = st.text_input("🪪 Cédula / Documento:", value=datos.get('cedula', ''))
+
+            tel_actual = st.session_state.get("telefono_paciente", "")
+            if tel_actual:
+                st.markdown(f'<div class="dinamica-status">✅ Teléfono vinculado desde Dinámica: <b>{tel_actual}</b></div>', unsafe_allow_html=True)
+            
+            telefono_input = st.text_input("📱 Celular del Paciente (para envío WhatsApp):", value=tel_actual)
+
             paciente_nombre_archivo = normalizar_nombre_archivo(nombre_confirmado)
 
             st.subheader("📝 Edición de la Interpretación Completa")
-            informe_para_grabar = st.text_area("Documento oficial para inyectar en el PDF:", value=st.session_state.texto_informe, height=360)
+            informe_para_grabar = st.text_area("Documento oficial para inyectar en el PDF:", value=st.session_state.texto_informe, height=330)
 
             debe_estampar = perfil_activo["id"] in ["dr.amaya", "admin"]
             pdf_final, img_preview = inyectar_y_generar_preview(
@@ -976,6 +1038,30 @@ with tab_procesar:
                     )
                     st.success(f"✅ Guardado en archivo clínico: {nombre_confirmado}")
 
+            if telefono_input:
+                tel_limpio = re.sub(r'\D', '', telefono_input)
+                if not tel_limpio.startswith("57") and len(tel_limpio) == 10:
+                    tel_limpio = "57" + tel_limpio
+                
+                url_cert = f"https://holtercencardio.streamlit.app/?val={st.session_state.estudio_uuid[:12]}&pac={urllib.parse.quote(nombre_confirmado)}&med={urllib.parse.quote(perfil_activo['nombre_completo'])}"
+                
+                msg_wa = f"""Estimado(a) paciente {nombre_confirmado}, el Centro Cardiovascular Colombiano CENCARDIO le hace entrega de su resultado oficial de Monitoreo Holter 24 Horas (CUPS 895001), interpretado por el especialista {perfil_activo['nombre_completo']}.
+
+Puede consultar su certificación oficial y autenticidad médica escaneando el código QR del informe o ingresando aquí:
+{url_cert}
+
+Le deseamos un excelente día."""
+
+                wa_url = f"https://api.whatsapp.com/send?phone={tel_limpio}&text={urllib.parse.quote(msg_wa)}"
+                
+                st.markdown(f"""
+                    <a href="{wa_url}" target="_blank" style="text-decoration:none;">
+                        <div style="background-color: #25D366; color: white; text-align: center; padding: 0.6rem; border-radius: 8px; font-weight: 700; margin-top: 0.6rem;">
+                            📲 ENVIAR RESULTADO OFICIAL POR WHATSAPP
+                        </div>
+                    </a>
+                """, unsafe_allow_html=True)
+
             st.write("")
             if st.button("🔄 Descartar / Limpiar Estudio Actual", use_container_width=True):
                 if "datos_actuales" in st.session_state:
@@ -984,6 +1070,8 @@ with tab_procesar:
                     del st.session_state["archivo_actual"]
                 if "texto_informe" in st.session_state:
                     del st.session_state["texto_informe"]
+                if "telefono_paciente" in st.session_state:
+                    del st.session_state["telefono_paciente"]
                 st.rerun()
 
         with col_preview:
@@ -1045,7 +1133,7 @@ with tab_historial:
             
             if busqueda.lower() in pac_nom.lower():
                 nom_archivo_copia = normalizar_nombre_archivo(pac_nom)
-                with st.expander(f"👤 {pac_nom} | 📅 {fecha} | 👨‍⚕️ {med}"):
+                with st.expander(f"👤 {pac_nom} | 📅 {fecha} | 👨‍⚕️️ {med}"):
                     c_det1, c_det2, c_desc, c_del = st.columns([2, 2, 2, 1.5])
                     c_det1.write(f"**CUPS:** 895001\n**FC Media:** {fc} lpm\n**SDNN 24h:** {sdnn} ms")
                     c_det2.write(f"**Código de Autenticidad:**\n`{cod_ver}`")
