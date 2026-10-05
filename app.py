@@ -5,12 +5,56 @@ import re
 import base64
 import os
 import io
+import sqlite3
+from datetime import datetime
 
 st.set_page_config(
     page_title="Lectura de Holter Cencardio",
     page_icon="🫀",
     layout="wide"
 )
+
+# ==========================================
+# BASE DE DATOS LOCAL (HISTORIAL CLÍNICO)
+# ==========================================
+def init_db():
+    conn = sqlite3.connect("historial_holter.db")
+    c = conn.cursor()
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS estudios (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            fecha_registro TEXT,
+            paciente_nombre TEXT,
+            fc_prom INTEGER,
+            sdnn INTEGER,
+            medico_firmante TEXT,
+            informe_texto TEXT,
+            pdf_blob BLOB
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+init_db()
+
+def guardar_estudio_db(nombre, fc, sdnn, medico, texto, pdf_bytes):
+    conn = sqlite3.connect("historial_holter.db")
+    c = conn.cursor()
+    fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    c.execute("""
+        INSERT INTO estudios (fecha_registro, paciente_nombre, fc_prom, sdnn, medico_firmante, informe_texto, pdf_blob)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (fecha_actual, nombre, fc, sdnn, medico, texto, pdf_bytes))
+    conn.commit()
+    conn.close()
+
+def obtener_historial_db():
+    conn = sqlite3.connect("historial_holter.db")
+    c = conn.cursor()
+    c.execute("SELECT id, fecha_registro, paciente_nombre, fc_prom, sdnn, medico_firmante, pdf_blob FROM estudios ORDER BY id DESC")
+    filas = c.fetchall()
+    conn.close()
+    return filas
 
 # ==========================================
 # GESTIÓN DE FONDO PERSONALIZADO
@@ -59,7 +103,6 @@ st.markdown("""
         font-family: monospace !important;
         font-size: 13px !important;
     }
-    /* Marco elegante para la vista previa del documento */
     .preview-container {
         border: 2px solid #cbd5e1;
         border-radius: 8px;
@@ -71,11 +114,27 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 1. CONTROL DE ACCESO
+# 1. PERFILES MÉDICOS Y ACCESO
 # ==========================================
-USUARIOS_AUTORIZADOS = {
-    "dr.amaya": "Cardio2025*",
-    "admin": "HolterClaveSegura123"
+PERFILES_MEDICOS = {
+    "dr.amaya": {
+        "clave": "Cardio2025*",
+        "nombre_completo": "DR. WILLIAM AMAYA RAMIREZ",
+        "especialidad": "INTERNISTA - CARDIÓLOGO",
+        "registro": "RM 79.502.624 SDS"
+    },
+    "dra.cardio": {
+        "clave": "Cardio2026*",
+        "nombre_completo": "DRA. PAOLA FIGUEROA",
+        "especialidad": "MÉDICO ESPECIALISTA EN CARDIOLOGÍA",
+        "registro": "RM 52.890.123 SDS"
+    },
+    "admin": {
+        "clave": "HolterClaveSegura123",
+        "nombre_completo": "DR. WILLIAM AMAYA RAMIREZ",
+        "especialidad": "INTERNISTA - CARDIÓLOGO",
+        "registro": "RM 79.502.624 SDS"
+    }
 }
 
 if "autenticado" not in st.session_state:
@@ -95,7 +154,7 @@ if not st.session_state.autenticado:
         usuario = st.text_input("Usuario")
         clave = st.text_input("Contraseña", type="password")
         if st.form_submit_button("Iniciar Sesión", type="primary"):
-            if usuario in USUARIOS_AUTORIZADOS and USUARIOS_AUTORIZADOS[usuario] == clave:
+            if usuario in PERFILES_MEDICOS and PERFILES_MEDICOS[usuario]["clave"] == clave:
                 st.session_state.autenticado = True
                 st.session_state.usuario_actual = usuario
                 st.rerun()
@@ -103,21 +162,24 @@ if not st.session_state.autenticado:
                 st.error("❌ Credenciales incorrectas. Verifica usuario y contraseña.")
     st.stop()
 
+# Perfil del médico conectado
+perfil_activo = PERFILES_MEDICOS[st.session_state.usuario_actual]
+
 # ==========================================
 # 2. MOTOR CLÍNICO SPACELABS
 # ==========================================
 with st.sidebar:
-    st.write(f"👤 Conectado: **{st.session_state.usuario_actual}**")
+    st.write(f"👤 Especialista: **{perfil_activo['nombre_completo']}**")
+    st.caption(f"{perfil_activo['especialidad']}\n{perfil_activo['registro']}")
     if st.button("Cerrar Sesión"):
         cerrar_sesion()
         st.rerun()
     st.divider()
-    st.caption("CENCARDIO - Sistema Holter Profesional v4.0")
+    st.caption("CENCARDIO - Sistema Clínico Integral v5.0")
 
 st.title("🫀 Lectura de Holter Cencardio")
-st.write("Carga el archivo PDF de Spacelabs. El sistema extraerá los datos, redactará la lectura y mostrará la vista previa del documento diligenciado.")
 
-uploaded_file = st.file_uploader("Cargar estudio Holter (PDF)", type=["pdf"])
+tab_procesar, tab_historial = st.tabs(["📥 Procesar Nuevo Estudio", "📁 Archivo Clínico e Historial"])
 
 def limpiar_numero(val_str):
     if not val_str:
@@ -191,7 +253,7 @@ def extraer_datos_spacelabs(pdf_bytes):
 
     return datos
 
-def redactar_interpretacion(d):
+def redactar_interpretacion(d, perfil):
     p1 = f"1. Ritmo de sinusal frecuencia cardiaca promedio de {d['fc_prom']} latidos por minuto."
 
     if d["qtc_prom"] > 460:
@@ -266,20 +328,16 @@ def redactar_interpretacion(d):
 {p9}
 {p10}
 
-DR. WILLIAM AMAYA RAMIREZ
-INTERNISTA - CARDIÓLOGO
-RM 79.502.624 SDS"""
+{perfil['nombre_completo']}
+{perfil['especialidad']}
+{perfil['registro']}"""
 
     return informe
 
-# ==========================================
-# 3. INYECCIÓN Y PREVISUALIZADOR
-# ==========================================
 def inyectar_y_generar_preview(pdf_bytes, texto_informe):
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     pagina1 = doc[0]
 
-    # Localización dinámica del recuadro
     rects_h = pagina1.search_for("Hallazgos:")
     rects_f = pagina1.search_for("Firma del médico")
     if not rects_f:
@@ -294,7 +352,6 @@ def inyectar_y_generar_preview(pdf_bytes, texto_informe):
     else:
         rect_hallazgos = fitz.Rect(35, 510, 565, 730)
 
-    # Auto-escalado de fuente
     font_size = 8.2
     exito = False
     while font_size >= 4.5:
@@ -324,68 +381,104 @@ def inyectar_y_generar_preview(pdf_bytes, texto_informe):
                 )
                 y_cursor += 9.5
 
-    # Renderizar la Página 1 como imagen PNG de alta definición (DPI 150)
     pix = pagina1.get_pixmap(dpi=150)
     img_preview = pix.tobytes("png")
-
-    # Documento PDF completo modificado
     pdf_final_bytes = doc.tobytes()
     doc.close()
 
     return pdf_final_bytes, img_preview
 
 # ==========================================
-# 4. INTERFAZ DE USUARIO EN DOS COLUMNAS
+# PESTAÑA 1: PROCESAMIENTO
 # ==========================================
-if uploaded_file is not None:
-    bytes_originales = uploaded_file.getvalue()
+with tab_procesar:
+    uploaded_file = st.file_uploader("Cargar estudio Holter de Spacelabs (PDF)", type=["pdf"])
 
-    if "datos_actuales" not in st.session_state or st.session_state.get("archivo_actual") != uploaded_file.name:
-        with st.spinner("Extrayendo datos de Spacelabs..."):
-            st.session_state.datos_actuales = extraer_datos_spacelabs(bytes_originales)
-            st.session_state.texto_informe = redactar_interpretacion(st.session_state.datos_actuales)
-            st.session_state.archivo_actual = uploaded_file.name
+    if uploaded_file is not None:
+        bytes_originales = uploaded_file.getvalue()
 
-    datos = st.session_state.datos_actuales
+        if "datos_actuales" not in st.session_state or st.session_state.get("archivo_actual") != uploaded_file.name:
+            with st.spinner("Extrayendo datos de Spacelabs..."):
+                st.session_state.datos_actuales = extraer_datos_spacelabs(bytes_originales)
+                st.session_state.texto_informe = redactar_interpretacion(st.session_state.datos_actuales, perfil_activo)
+                st.session_state.archivo_actual = uploaded_file.name
+                st.session_state.guardado = False
 
-    # Métricas de verificación clínica
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("FC Promedio", f"{datos['fc_prom']} lpm", f"Mín {datos['fc_min']} | Máx {datos['fc_max']}")
-    c2.metric("Ectopias Ventriculares", f"{datos['ev_total']} EV", f"TV: {datos['tv_episodios']}")
-    c3.metric("Ectopias Supraventriculares", f"{datos['esv_total']} ESV", f"TSV: {datos['tsv_episodios']}")
-    c4.metric("SDNN (24 Horas)", f"{datos['sdnn_24h']} ms", f"ST: {datos['st_episodios']} ep.")
+        datos = st.session_state.datos_actuales
 
-    st.divider()
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("FC Promedio", f"{datos['fc_prom']} lpm", f"Mín {datos['fc_min']} | Máx {datos['fc_max']}")
+        c2.metric("Ectopias Ventriculares", f"{datos['ev_total']} EV", f"TV: {datos['tv_episodios']}")
+        c3.metric("Ectopias Supraventriculares", f"{datos['esv_total']} ESV", f"TSV: {datos['tsv_episodios']}")
+        c4.metric("SDNN (24 Horas)", f"{datos['sdnn_24h']} ms", f"ST: {datos['st_episodios']} ep.")
 
-    # Distribución en 2 columnas: Edición a la izquierda, Vista previa a la derecha
-    col_edicion, col_preview = st.columns([1, 1], gap="large")
+        st.divider()
 
-    with col_edicion:
-        st.subheader("📝 Edición de la Interpretación")
-        informe_para_grabar = st.text_area(
-            "Edita aquí el texto si requieres agregar comentarios (la vista previa se actualizará):",
-            value=st.session_state.texto_informe,
-            height=400
-        )
+        col_edicion, col_preview = st.columns([1, 1], gap="large")
 
-        # Generar PDF y la imagen de vista previa
-        pdf_final, img_preview = inyectar_y_generar_preview(bytes_originales, informe_para_grabar)
+        with col_edicion:
+            st.subheader("📝 Edición de la Interpretación")
+            informe_para_grabar = st.text_area(
+                "Edita el texto antes de generar el documento final:",
+                value=st.session_state.texto_informe,
+                height=380
+            )
 
-        st.download_button(
-            label="📄 DESCARGAR PDF OFICIAL DILIGENCIADO",
-            data=pdf_final,
-            file_name=f"Holter_{datos['paciente'].replace(' ', '_')}_Firmado.pdf",
-            mime="application/pdf",
-            type="primary",
-            use_container_width=True
-        )
+            pdf_final, img_preview = inyectar_y_generar_preview(bytes_originales, informe_para_grabar)
 
-    with col_preview:
-        st.subheader("👁️ Vista Previa en Vivo (Página 1)")
-        st.markdown('<div class="preview-container">', unsafe_allow_html=True)
-        st.image(
-            img_preview, 
-            caption=f"Página 1 - {datos['paciente']}", 
-            use_container_width=True
-        )
-        st.markdown('</div>', unsafe_allow_html=True)
+            col_btn1, col_btn2 = st.columns([1, 1])
+            with col_btn1:
+                st.download_button(
+                    label="📄 DESCARGAR PDF DILIGENCIADO",
+                    data=pdf_final,
+                    file_name=f"Holter_{datos['paciente'].replace(' ', '_')}_Firmado.pdf",
+                    mime="application/pdf",
+                    type="primary",
+                    use_container_width=True
+                )
+            with col_btn2:
+                if st.button("💾 Guardar en Archivo Clínico", use_container_width=True):
+                    guardar_estudio_db(
+                        datos['paciente'],
+                        datos['fc_prom'],
+                        datos['sdnn_24h'],
+                        perfil_activo['nombre_completo'],
+                        informe_para_grabar,
+                        pdf_final
+                    )
+                    st.success("✅ Estudio guardado en la base de datos.")
+
+        with col_preview:
+            st.subheader("👁️ Vista Previa Oficial (Página 1)")
+            st.markdown('<div class="preview-container">', unsafe_allow_html=True)
+            st.image(img_preview, caption=f"Página 1 - {datos['paciente']}", use_container_width=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+
+# ==========================================
+# PESTAÑA 2: ARCHIVO CLÍNICO E HISTORIAL
+# ==========================================
+with tab_historial:
+    st.subheader("📂 Registro de Estudios Procesados")
+    historial = obtener_historial_db()
+
+    if not historial:
+        st.info("Aún no hay estudios archivados en el sistema.")
+    else:
+        busqueda = st.text_input("🔍 Buscar por nombre del paciente:", "")
+        
+        for item in historial:
+            est_id, fecha, pac_nom, fc, sdnn, med, pdf_data = item
+            
+            if busqueda.lower() in pac_nom.lower():
+                with st.expander(f"🫀 {pac_nom} — {fecha} (Especialista: {med})"):
+                    col_info1, col_info2, col_descarga = st.columns([2, 2, 2])
+                    col_info1.write(f"**FC Media:** {fc} lpm")
+                    col_info2.write(f"**SDNN 24h:** {sdnn} ms")
+                    with col_descarga:
+                        st.download_button(
+                            label="📥 Volver a descargar PDF",
+                            data=pdf_data,
+                            file_name=f"Holter_{pac_nom.replace(' ', '_')}_Copia.pdf",
+                            mime="application/pdf",
+                            key=f"descarga_{est_id}"
+                        )
