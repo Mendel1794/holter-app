@@ -192,7 +192,6 @@ st.markdown("""
         padding: 6px;
     }
 
-    /* Banners del Semáforo Clínico */
     .triage-rojo {
         background: #fee2e2; border-left: 6px solid #dc2626; color: #991b1b;
         padding: 1rem 1.2rem; border-radius: 8px; margin-bottom: 1rem; font-weight: 600;
@@ -209,7 +208,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# BASE DE DATOS LOCAL
+# BASE DE DATOS LOCAL ULTRA-ROBUSTA
 # ==========================================
 def init_db():
     conn = sqlite3.connect("historial_holter.db")
@@ -228,6 +227,14 @@ def init_db():
         )
     """)
     conn.commit()
+
+    # Intentar incorporar la columna si la base de datos es de una versión previa
+    try:
+        c.execute("ALTER TABLE estudios ADD COLUMN codigo_verificacion TEXT")
+        conn.commit()
+    except Exception:
+        pass
+
     conn.close()
 
 init_db()
@@ -236,18 +243,36 @@ def guardar_estudio_db(nombre, fc, sdnn, medico, texto, pdf_bytes, cod_verif):
     conn = sqlite3.connect("historial_holter.db")
     c = conn.cursor()
     fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    c.execute("""
-        INSERT INTO estudios (fecha_registro, paciente_nombre, fc_prom, sdnn, medico_firmante, informe_texto, pdf_blob, codigo_verificacion)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (fecha_actual, nombre, fc, sdnn, medico, texto, pdf_bytes, cod_verif))
+    try:
+        c.execute("""
+            INSERT INTO estudios (fecha_registro, paciente_nombre, fc_prom, sdnn, medico_firmante, informe_texto, pdf_blob, codigo_verificacion)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (fecha_actual, nombre, fc, sdnn, medico, texto, pdf_bytes, cod_verif))
+    except Exception:
+        # Respaldo si la base de datos aún no tiene la octava columna
+        c.execute("""
+            INSERT INTO estudios (fecha_registro, paciente_nombre, fc_prom, sdnn, medico_firmante, informe_texto, pdf_blob)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (fecha_actual, nombre, fc, sdnn, medico, texto, pdf_bytes))
     conn.commit()
     conn.close()
 
 def obtener_historial_db():
     conn = sqlite3.connect("historial_holter.db")
     c = conn.cursor()
-    c.execute("SELECT id, fecha_registro, paciente_nombre, fc_prom, sdnn, medico_firmante, pdf_blob, codigo_verificacion FROM estudios ORDER BY id DESC")
-    filas = c.fetchall()
+    filas = []
+    try:
+        # Intento 1: Obtener esquema moderno (8 columnas)
+        c.execute("SELECT id, fecha_registro, paciente_nombre, fc_prom, sdnn, medico_firmante, pdf_blob, codigo_verificacion FROM estudios ORDER BY id DESC")
+        filas = c.fetchall()
+    except Exception:
+        try:
+            # Intento 2: Esquema anterior (7 columnas) rellenando la octava con 'N/A'
+            c.execute("SELECT id, fecha_registro, paciente_nombre, fc_prom, sdnn, medico_firmante, pdf_blob FROM estudios ORDER BY id DESC")
+            filas_anteriores = c.fetchall()
+            filas = [(r[0], r[1], r[2], r[3], r[4], r[5], r[6], "N/A") for r in filas_anteriores]
+        except Exception:
+            filas = []
     conn.close()
     return filas
 
@@ -365,7 +390,7 @@ with st.sidebar:
         cerrar_sesion()
         st.rerun()
     st.divider()
-    st.caption("CENCARDIO · Plataforma Médica v7.0")
+    st.caption("CENCARDIO · Plataforma Médica v7.2")
 
 c_head1, c_head2 = st.columns([1, 6])
 with c_head1:
@@ -610,7 +635,7 @@ def inyectar_y_generar_preview(pdf_bytes, texto_informe, datos_paciente, perfil,
                 )
                 y_cursor += 9.5
 
-    # ESTAMPADO DE CÓDIGO QR EN LA PARTE INFERIOR IZQUIERDA
+    # Estampado del QR
     fecha_emision = datetime.now().strftime("%Y-%m-%d %H:%M")
     qr_bytes = generar_qr_verificacion(
         datos_paciente, 
@@ -620,14 +645,12 @@ def inyectar_y_generar_preview(pdf_bytes, texto_informe, datos_paciente, perfil,
         codigo_uuid
     )
     
-    # Coordenadas para el QR en la parte inferior izquierda de la página 1
     rect_qr = fitz.Rect(38, 715, 82, 759)
     pagina1.insert_image(rect_qr, stream=qr_bytes)
     
-    # Texto de trazabilidad al lado del QR
     pagina1.insert_text(
         fitz.Point(86, 732),
-        f"Validado Digitalmente - Res. 3100 de 2019",
+        "Validado Digitalmente - Res. 3100 de 2019",
         fontsize=5.2,
         fontname="helv",
         color=(0.1, 0.2, 0.4)
@@ -640,7 +663,7 @@ def inyectar_y_generar_preview(pdf_bytes, texto_informe, datos_paciente, perfil,
         color=(0.3, 0.3, 0.3)
     )
 
-    # ESTAMPADO DE LA FIRMA DIGITALIZADA
+    # Estampado de la firma
     firma_png_bytes = procesar_firma_transparente()
     if firma_png_bytes and estampador_activo:
         if rects_f:
@@ -676,9 +699,7 @@ with tab_procesar:
 
         datos = st.session_state.datos_actuales
 
-        # ==========================================
-        # SEMÁFORO CLÍNICO DE ALERTA MÉDICA (TRIAGE)
-        # ==========================================
+        # Semáforo de triage
         alertas_criticas = []
         alertas_moderadas = []
 
@@ -801,7 +822,6 @@ with tab_historial:
     if not historial:
         st.info("Aún no hay estudios archivados en el sistema.")
     else:
-        # Generar reporte descargable para facturación IPS
         datos_tabla = []
         for h in historial:
             datos_tabla.append({
@@ -811,7 +831,7 @@ with tab_historial:
                 "FC Media (lpm)": h[3],
                 "SDNN 24h (ms)": h[4],
                 "Especialista Firmante": h[5],
-                "Código de Verificación": h[7] if len(h) > 7 else "N/A"
+                "Código de Verificación": h[7] if len(h) > 7 and h[7] else "N/A"
             })
         df_produccion = pd.DataFrame(datos_tabla)
 
@@ -840,7 +860,7 @@ with tab_historial:
             sdnn = item[4]
             med = item[5]
             pdf_data = item[6]
-            cod_ver = item[7] if len(item) > 7 else "N/A"
+            cod_ver = item[7] if len(item) > 7 and item[7] else "N/A"
             
             if busqueda.lower() in pac_nom.lower():
                 nom_archivo_copia = normalizar_nombre_archivo(pac_nom)
