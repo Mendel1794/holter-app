@@ -3,3 +3,5 @@ pypdf
 pymupdf
 pillow
 qrcode
+pandas
+plotly
