@@ -103,7 +103,7 @@ if uploaded_file is not None:
                     pdf_bytes = uploaded_file.getvalue()
 
                     response = client.models.generate_content(
-                        model='gemini-2.5-flash',
+                        model='gemini-3.8-flash',
                         contents=[
                             types.Part.from_bytes(data=pdf_bytes, mime_type='application/pdf'),
                             PROMPT_CARDIOLOGIA
