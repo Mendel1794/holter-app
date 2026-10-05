@@ -18,7 +18,6 @@ st.set_page_config(
 # UTILIDAD: NORMALIZAR NOMBRE DE ARCHIVO
 # ==========================================
 def normalizar_nombre_archivo(nombre):
-    # Remueve comas, puntos y caracteres no válidos; une nombres con guiones bajos
     limpio = re.sub(r'[^A-Za-z0-9ÁÉÍÓÚáéíóúÑñ\s]', ' ', nombre)
     limpio = re.sub(r'\s+', '_', limpio).strip('_')
     return limpio if limpio else "PACIENTE"
@@ -65,6 +64,13 @@ def obtener_historial_db():
     conn.close()
     return filas
 
+def eliminar_estudio_db(estudio_id):
+    conn = sqlite3.connect("historial_holter.db")
+    c = conn.cursor()
+    c.execute("DELETE FROM estudios WHERE id = ?", (estudio_id,))
+    conn.commit()
+    conn.close()
+
 # ==========================================
 # GESTIÓN DE FONDO PERSONALIZADO
 # ==========================================
@@ -99,11 +105,9 @@ st.markdown("""
     h2, h3 { color: #0369a1 !important; }
     [data-testid="stMetricValue"] { color: #0284c7 !important; font-weight: 700; }
     .stButton > button {
-        background-color: #0284c7 !important;
-        color: white !important;
         border-radius: 8px;
         font-weight: 600;
-        padding: 0.5rem 1.5rem;
+        padding: 0.5rem 1.2rem;
     }
     textarea {
         background-color: #ffffff !important;
@@ -119,32 +123,45 @@ st.markdown("""
         background: white;
         padding: 6px;
     }
+    .login-card {
+        background: rgba(255, 255, 255, 0.95);
+        border: 1px solid #cbd5e1;
+        padding: 2.2rem;
+        border-radius: 14px;
+        box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+        max-width: 520px;
+        margin: auto;
+    }
     </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 1. PERFILES MÉDICOS Y ACCESO
+# 1. PERFILES MÉDICOS Y SELECTOR DE ACCESO
 # ==========================================
 PERFILES_MEDICOS = {
     "dr.suarez": {
+        "etiqueta": "👨‍⚕️ Dr. Martin Suárez Arámbula (Cardiólogo Hemodinamista)",
         "clave": "Suarez2026*",
         "nombre_completo": "DR. MARTIN SUÁREZ ARÁMBULA",
         "especialidad": "MÉDICO INTERNISTA - CARDIÓLOGO HEMODINAMISTA",
         "registro": "RM 13491094"
     },
     "dr.amaya": {
+        "etiqueta": "👨‍⚕️ Dr. William Amaya Ramirez (Internista - Cardiólogo)",
         "clave": "Cardio2025*",
         "nombre_completo": "DR. WILLIAM AMAYA RAMIREZ",
         "especialidad": "INTERNISTA - CARDIÓLOGO",
         "registro": "RM 79.502.624 SDS"
     },
     "dra.cardio": {
+        "etiqueta": "👩‍⚕️ Dra. Paola Figueroa (Cardióloga)",
         "clave": "Cardio2026*",
         "nombre_completo": "DRA. PAOLA FIGUEROA",
         "especialidad": "MÉDICO ESPECIALISTA EN CARDIOLOGÍA",
         "registro": "RM 52.890.123 SDS"
     },
     "admin": {
+        "etiqueta": "⚙️ Administrador General del Sistema",
         "clave": "HolterClaveSegura123",
         "nombre_completo": "DR. MARTIN SUÁREZ ARÁMBULA",
         "especialidad": "MÉDICO INTERNISTA - CARDIÓLOGO HEMODINAMISTA",
@@ -161,20 +178,38 @@ def cerrar_sesion():
     st.session_state.autenticado = False
     st.session_state.usuario_actual = ""
 
+# PANTALLA DE ACCESO CON SELECTOR ELEGANTE
 if not st.session_state.autenticado:
-    st.title("🫀 Lectura de Holter Cencardio")
-    st.write("Ingresa tus credenciales autorizadas para acceder al portal.")
+    col_v1, col_center, col_v2 = st.columns([1, 2, 1])
+    
+    with col_center:
+        st.markdown('<div class="login-card">', unsafe_allow_html=True)
+        st.title("🫀 CEN CARDIO")
+        st.subheader("Portal de Lectura e Interpretación Holter")
+        st.caption("Selecciona tu perfil médico autorizado para ingresar.")
 
-    with st.form("form_login"):
-        usuario = st.text_input("Usuario")
-        clave = st.text_input("Contraseña", type="password")
-        if st.form_submit_button("Iniciar Sesión", type="primary"):
-            if usuario in PERFILES_MEDICOS and PERFILES_MEDICOS[usuario]["clave"] == clave:
-                st.session_state.autenticado = True
-                st.session_state.usuario_actual = usuario
-                st.rerun()
-            else:
-                st.error("❌ Credenciales incorrectas. Verifica usuario y contraseña.")
+        # Opciones para el desplegable
+        opciones_selector = {datos["etiqueta"]: usuario_key for usuario_key, datos in PERFILES_MEDICOS.items()}
+
+        with st.form("form_login"):
+            seleccion_etiqueta = st.selectbox(
+                "Especialista Responsable:",
+                options=list(opciones_selector.keys())
+            )
+            clave = st.text_input("Contraseña de Acceso:", type="password")
+            boton_ingresar = st.form_submit_button("Ingresar al Sistema", type="primary", use_container_width=True)
+
+            if boton_ingresar:
+                usuario_id = opciones_selector[seleccion_etiqueta]
+                if PERFILES_MEDICOS[usuario_id]["clave"] == clave:
+                    st.session_state.autenticado = True
+                    st.session_state.usuario_actual = usuario_id
+                    st.rerun()
+                else:
+                    st.error("❌ Contraseña incorrecta para el especialista seleccionado.")
+
+        st.markdown('</div>', unsafe_allow_html=True)
+
     st.stop()
 
 perfil_activo = PERFILES_MEDICOS[st.session_state.usuario_actual]
@@ -185,11 +220,11 @@ perfil_activo = PERFILES_MEDICOS[st.session_state.usuario_actual]
 with st.sidebar:
     st.write(f"👤 Especialista: **{perfil_activo['nombre_completo']}**")
     st.caption(f"{perfil_activo['especialidad']}\n{perfil_activo['registro']}")
-    if st.button("Cerrar Sesión"):
+    if st.button("Cerrar Sesión", use_container_width=True):
         cerrar_sesion()
         st.rerun()
     st.divider()
-    st.caption("CENCARDIO - Sistema Clínico Integral v5.2")
+    st.caption("CENCARDIO - Sistema Clínico Integral v5.4")
 
 st.title("🫀 Lectura de Holter Cencardio")
 
@@ -204,7 +239,7 @@ def limpiar_numero(val_str):
     except:
         return 0
 
-def extraer_datos_spacelabs(pdf_bytes):
+def extraer_datos_spacelabs(pdf_bytes, filename=""):
     reader = PdfReader(io.BytesIO(pdf_bytes))
     texto = ""
     for page in reader.pages:
@@ -214,12 +249,32 @@ def extraer_datos_spacelabs(pdf_bytes):
 
     datos = {}
 
-    paciente_match = re.search(r"ID paciente:.*?\n([A-ZÁÉÍÓÚÑ\s,]+)\nInforme Holter", texto)
-    if paciente_match:
-        datos["paciente"] = paciente_match.group(1).replace("\n", " ").strip()
-    else:
-        datos["paciente"] = "PACIENTE_ESTUDIO"
+    # Detección del nombre del paciente
+    nombre_detectado = None
+    m_nom = re.search(r"([A-ZÁÉÍÓÚÑ\s]{3,50},\s*[A-ZÁÉÍÓÚÑ\s]{3,50})[\s\n]+(?:No confirmado|Confirmado)?[\s\n]*Informe Holter", texto)
+    if m_nom:
+        nombre_detectado = m_nom.group(1).replace("\n", " ").strip()
 
+    if not nombre_detectado:
+        lineas = [l.strip() for l in texto.split("\n") if l.strip()]
+        for idx, l in enumerate(lineas):
+            if "Informe Holter" in l and idx > 0:
+                candidato = lineas[idx - 1]
+                if candidato in ["No confirmado", "Confirmado"] and idx > 1:
+                    candidato = lineas[idx - 2]
+                if candidato and len(candidato) > 4 and not any(p in candidato for p in ["CENTRO", "COLOMBIA", "Cra.", "30139"]):
+                    nombre_detectado = candidato
+                    break
+
+    if not nombre_detectado and filename:
+        nom_base = os.path.splitext(filename)[0]
+        nom_limpio = re.sub(r'\(.*?\)', '', nom_base).strip()
+        if len(nom_limpio) > 3:
+            nombre_detectado = nom_limpio
+
+    datos["paciente"] = nombre_detectado if nombre_detectado else "PACIENTE"
+
+    # Frecuencia cardíaca
     fc_p = re.search(r"Prom\.?\s*(\d{2,3})", texto)
     datos["fc_prom"] = int(fc_p.group(1)) if fc_p else 70
 
@@ -229,9 +284,11 @@ def extraer_datos_spacelabs(pdf_bytes):
     fc_min = re.search(r"M[íi]n\s*(\d{2,3})", texto)
     datos["fc_min"] = int(fc_min.group(1)) if fc_min else 55
 
+    # Pausas
     pausa_match = re.search(r"\bPausa\s+(\d+)", texto)
     datos["pausas"] = int(pausa_match.group(1)) if pausa_match else 0
 
+    # Arritmias Ventriculares
     ev_m = re.search(r"Latidos ventriculares\s*:\s*([\d\.]+)", texto)
     datos["ev_total"] = limpiar_numero(ev_m.group(1)) if ev_m else 0
 
@@ -244,12 +301,14 @@ def extraer_datos_spacelabs(pdf_bytes):
     big_m = re.search(r"Bigeminismo\s+([\d\.]+)", texto)
     datos["bigeminismo"] = limpiar_numero(big_m.group(1)) if big_m else 0
 
+    # Arritmias Supraventriculares
     esv_m = re.search(r"Latidos supraventriculares\s*:\s*([\d\.]+)", texto)
     datos["esv_total"] = limpiar_numero(esv_m.group(1)) if esv_m else 0
 
     tsv_m = re.search(r"\bTSV\s+([\d\.]+)", texto)
     datos["tsv_episodios"] = limpiar_numero(tsv_m.group(1)) if tsv_m else 0
 
+    # Segmento ST
     st_m = re.search(r"Depresi[óo]n ST\s+(\d+)\s+(-?[\d,\.]+)\s+([^\n]+)", texto)
     if st_m:
         datos["st_episodios"] = int(st_m.group(1))
@@ -259,9 +318,11 @@ def extraer_datos_spacelabs(pdf_bytes):
         datos["st_episodios"] = int(st_alt.group(1)) if st_alt else 0
         datos["st_desviacion"] = "0"
 
+    # SDNN 24 Horas
     sdnn_m = re.search(r"Valor de 24 horas\s+[\d\.]+\s+([\d\.]+)", texto)
     datos["sdnn_24h"] = int(sdnn_m.group(1)) if sdnn_m else 85
 
+    # QTc
     qtc_m = re.search(r"Todos los per[íi]odos\s+[\d\.]+\s+[\d\.]+\s+([\d\.]+)", texto)
     datos["qtc_prom"] = int(qtc_m.group(1)) if qtc_m else 400
 
@@ -413,12 +474,11 @@ with tab_procesar:
 
         if "datos_actuales" not in st.session_state or st.session_state.get("archivo_actual") != uploaded_file.name:
             with st.spinner("Extrayendo datos de Spacelabs..."):
-                st.session_state.datos_actuales = extraer_datos_spacelabs(bytes_originales)
+                st.session_state.datos_actuales = extraer_datos_spacelabs(bytes_originales, uploaded_file.name)
                 st.session_state.texto_informe = redactar_interpretacion(st.session_state.datos_actuales, perfil_activo)
                 st.session_state.archivo_actual = uploaded_file.name
 
         datos = st.session_state.datos_actuales
-        paciente_nombre_archivo = normalizar_nombre_archivo(datos['paciente'])
 
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("FC Promedio", f"{datos['fc_prom']} lpm", f"Mín {datos['fc_min']} | Máx {datos['fc_max']}")
@@ -431,11 +491,17 @@ with tab_procesar:
         col_edicion, col_preview = st.columns([1, 1], gap="large")
 
         with col_edicion:
+            nombre_confirmado = st.text_input(
+                "👤 Nombre del Paciente (editable para el archivo y descarga):",
+                value=datos['paciente']
+            )
+            paciente_nombre_archivo = normalizar_nombre_archivo(nombre_confirmado)
+
             st.subheader("📝 Edición de la Interpretación")
             informe_para_grabar = st.text_area(
                 "Edita el texto antes de generar el documento final:",
                 value=st.session_state.texto_informe,
-                height=380
+                height=350
             )
 
             pdf_final, img_preview = inyectar_y_generar_preview(bytes_originales, informe_para_grabar)
@@ -453,19 +519,28 @@ with tab_procesar:
             with col_btn2:
                 if st.button("💾 Guardar en Archivo Clínico", use_container_width=True):
                     guardar_estudio_db(
-                        datos['paciente'],
+                        nombre_confirmado,
                         datos['fc_prom'],
                         datos['sdnn_24h'],
                         perfil_activo['nombre_completo'],
                         informe_para_grabar,
                         pdf_final
                     )
-                    st.success(f"✅ Guardado en archivo clínico: {datos['paciente']}")
+                    st.success(f"✅ Guardado con éxito: {nombre_confirmado}")
+
+            # Botón de descarte / limpieza rápida si el estudio no era el deseado
+            st.write("")
+            if st.button("🔄 Descartar / Limpiar Estudio Actual", use_container_width=True):
+                if "datos_actuales" in st.session_state:
+                    del st.session_state["datos_actuales"]
+                if "archivo_actual" in st.session_state:
+                    del st.session_state["archivo_actual"]
+                st.rerun()
 
         with col_preview:
             st.subheader("👁️ Vista Previa Oficial (Página 1)")
             st.markdown('<div class="preview-container">', unsafe_allow_html=True)
-            st.image(img_preview, caption=f"Página 1 - {datos['paciente']}", use_container_width=True)
+            st.image(img_preview, caption=f"Página 1 - {nombre_confirmado}", use_container_width=True)
             st.markdown('</div>', unsafe_allow_html=True)
 
 # ==========================================
@@ -486,7 +561,7 @@ with tab_historial:
             if busqueda.lower() in pac_nom.lower():
                 nom_archivo_copia = normalizar_nombre_archivo(pac_nom)
                 with st.expander(f"👤 {pac_nom} | 📅 {fecha} | 👨‍⚕️ {med}"):
-                    c_det1, c_det2, c_desc = st.columns([2, 2, 2])
+                    c_det1, c_det2, c_desc, c_del = st.columns([2, 2, 2, 1.5])
                     c_det1.write(f"**FC Media:** {fc} lpm")
                     c_det2.write(f"**SDNN 24h:** {sdnn} ms")
                     with c_desc:
@@ -495,5 +570,11 @@ with tab_historial:
                             data=pdf_data,
                             file_name=f"{nom_archivo_copia}_Holter_Copia.pdf",
                             mime="application/pdf",
-                            key=f"descarga_{est_id}"
+                            key=f"descarga_{est_id}",
+                            use_container_width=True
                         )
+                    with c_del:
+                        if st.button("🗑️ Eliminar Registro", key=f"del_{est_id}", use_container_width=True):
+                            eliminar_estudio_db(est_id)
+                            st.toast(f"Registro de {pac_nom} eliminado.", icon="🗑️")
+                            st.rerun()
