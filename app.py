@@ -122,6 +122,10 @@ st.markdown("""
         background: #dcfce7; border-left: 6px solid #16a34a; color: #166534;
         padding: 1rem 1.2rem; border-radius: 8px; margin-bottom: 1rem; font-weight: 600;
     }
+    .conclusion-box {
+        background: #f0f7ff; border: 1px solid #bfdbfe; border-left: 6px solid #13325b;
+        padding: 1rem 1.2rem; border-radius: 8px; margin-bottom: 1.2rem; font-size: 0.95rem; line-height: 1.5;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -254,7 +258,7 @@ def normalizar_nombre_archivo(nombre):
     return limpio if limpio else "PACIENTE"
 
 # ==========================================
-# BASE DE DATOS LOCAL CON BLINDAJE RETROCOMPATIBLE
+# BASE DE DATOS LOCAL
 # ==========================================
 def init_db():
     conn = sqlite3.connect("historial_holter.db")
@@ -430,7 +434,7 @@ with st.sidebar:
         cerrar_sesion()
         st.rerun()
     st.divider()
-    st.caption("CENCARDIO · Plataforma Médica v7.4")
+    st.caption("CENCARDIO · Plataforma Médica v7.5")
 
 c_head1, c_head2 = st.columns([1, 6])
 with c_head1:
@@ -550,7 +554,7 @@ def extraer_datos_spacelabs(pdf_bytes, filename=""):
 def sintetizar_conclusion_automatica(d):
     partes = []
 
-    # 1. Ritmo de base y respuesta cronotrópica
+    # 1. Ritmo y frecuencia cardíaca
     if d["fc_prom"] < 50:
         partes.append(f"Ritmo sinusal con tendencia a la bradicardia (FC promedio {d['fc_prom']} lpm).")
     elif d["fc_prom"] > 100:
@@ -560,19 +564,19 @@ def sintetizar_conclusion_automatica(d):
 
     # 2. Conducción y pausas
     if d["pausas"] > 0:
-        partes.append(f"Presencia de {d['pausas']} pausas patológicas (> 2.0 s), sugestivas de disfunción del automatismo sinusal o bloqueo AV.")
+        partes.append(f"Presencia de {d['pausas']} pausas patológicas (> 2.0 s), sugestivas de disfunción sinusal o bloqueo AV.")
     else:
         partes.append("Sin pausas patológicas ni bloqueos AV avanzados.")
 
     # 3. Arritmias ventriculares
     if d["tv_episodios"] > 0:
-        partes.append(f"Registro de taquicardia ventricular no sostenida ({d['tv_episodios']} episodios de TV).")
+        partes.append(f"Registro de taquicardia ventricular no sostenida ({d['tv_episodios']} rachas de TV).")
     elif d["ev_total"] > 2000:
-        partes.append(f"Carga ectópica ventricular elevada ({d['ev_total']} EV/24h), amerita correlación ecocardiográfica.")
+        partes.append(f"Carga ectópica ventricular elevada ({d['ev_total']} EV/24h), considerar correlación ecocardiográfica.")
     elif d["ev_total"] > 0:
         partes.append(f"Ectopias ventriculares monomorfas de baja carga ({d['ev_total']} EV).")
     else:
-        partes.append("Sin ectopia ventricular significativa.")
+        partes.append("Sin ectopia ventricular de relevancia clínica.")
 
     # 4. Arritmias supraventriculares
     if d["tsv_episodios"] > 0:
@@ -583,8 +587,10 @@ def sintetizar_conclusion_automatica(d):
     # 5. Segmento ST / Isquemia
     if d["st_episodios"] > 0:
         partes.append(f"Cambios en la repolarización compatibles con isquemia miocárdica silente ({d['st_episodios']} episodios de infradesnivel del ST).")
+    else:
+        partes.append("Sin alteraciones isquémicas del segmento ST.")
 
-    # 6. Variabilidad y riesgo cardiovascular
+    # 6. Variabilidad y riesgo autonómico
     if d["sdnn_24h"] < 50:
         partes.append("Variabilidad autonómica de la FC severamente disminuida (marcador de alto riesgo cardiovascular).")
     elif d["sdnn_24h"] <= 100:
@@ -656,8 +662,7 @@ def redactar_interpretacion(d, perfil):
 
     p10 = f"10. Riesgo del paciente SDNN a 24 HRS ({riesgo})."
 
-    # Conclusión clínica sintetizada automáticamente
-    conclusion_texto = sintetizar_conclusion_automatica(d)
+    conclusion_diagnostica = sintetizar_conclusion_automatica(d)
 
     informe = f"""INTERPRETACIÓN TEST HOLTER
 
@@ -673,7 +678,7 @@ def redactar_interpretacion(d, perfil):
 {p10}
 
 CONCLUSIÓN DIAGNÓSTICA:
-{conclusion_texto}
+{conclusion_diagnostica}
 
 {perfil['nombre_completo']}
 {perfil['especialidad']}
@@ -696,41 +701,38 @@ def inyectar_y_generar_preview(pdf_bytes, texto_informe, datos_paciente, perfil,
     if rects_h and rects_f:
         x0 = rects_h[0].x0 + 2
         y0 = rects_h[0].y1 + 4
-        y1 = rects_f[0].y0 - 8
+        y1 = rects_f[0].y0 - 6
         x1 = pagina1.rect.width - 36
         rect_hallazgos = fitz.Rect(x0, y0, x1, y1)
     else:
         rect_hallazgos = fitz.Rect(35, 508, 565, 730)
 
-    # Auto-escalado de fuente para ajustar los 10 puntos y la conclusión
-    font_size = 7.8
-    exito = False
-    while font_size >= 4.2:
-        rc = pagina1.insert_textbox(
+    # Cálculo seguro del tamaño de fuente en documento limpio
+    font_size = 7.6
+    for fs in [7.6, 7.2, 6.8, 6.4, 6.0, 5.5, 5.0]:
+        doc_test = fitz.open(stream=pdf_bytes, filetype="pdf")
+        p_test = doc_test[0]
+        rc = p_test.insert_textbox(
             rect_hallazgos,
             texto_informe,
-            fontsize=font_size,
+            fontsize=fs,
             fontname="helv",
-            color=(0, 0, 0),
             align=fitz.TEXT_ALIGN_LEFT
         )
+        doc_test.close()
         if rc >= 0:
-            exito = True
+            font_size = fs
             break
-        font_size -= 0.2
 
-    if not exito:
-        y_cursor = rect_hallazgos.y0
-        for linea in texto_informe.split("\n"):
-            if y_cursor < rect_hallazgos.y1:
-                pagina1.insert_text(
-                    fitz.Point(rect_hallazgos.x0, y_cursor),
-                    linea,
-                    fontsize=5.8,
-                    fontname="helv",
-                    color=(0, 0, 0)
-                )
-                y_cursor += 8.5
+    # Inserción definitiva con el tamaño óptimo encontrado
+    pagina1.insert_textbox(
+        rect_hallazgos,
+        texto_informe,
+        fontsize=font_size,
+        fontname="helv",
+        color=(0, 0, 0),
+        align=fitz.TEXT_ALIGN_LEFT
+    )
 
     # Estampado del QR
     fecha_emision = datetime.now().strftime("%Y-%m-%d")
@@ -786,6 +788,7 @@ with tab_procesar:
     if uploaded_file is not None:
         bytes_originales = uploaded_file.getvalue()
 
+        # Detección inicial o cambio de archivo
         if "datos_actuales" not in st.session_state or st.session_state.get("archivo_actual") != uploaded_file.name:
             with st.spinner("Analizando trazado de Spacelabs y sintetizando diagnóstico..."):
                 st.session_state.datos_actuales = extraer_datos_spacelabs(bytes_originales, uploaded_file.name)
@@ -793,8 +796,13 @@ with tab_procesar:
                 st.session_state.archivo_actual = uploaded_file.name
                 st.session_state.estudio_uuid = str(uuid.uuid4()).upper()
 
+        # Rompedor de caché retroactivo: si la sesión tenía texto viejo sin conclusión, se fuerza su redacción
+        if "CONCLUSIÓN DIAGNÓSTICA" not in st.session_state.get("texto_informe", ""):
+            st.session_state.texto_informe = redactar_interpretacion(st.session_state.datos_actuales, perfil_activo)
+
         datos = st.session_state.datos_actuales
 
+        # Semáforo de triage
         alertas_criticas = []
         alertas_moderadas = []
 
@@ -844,6 +852,16 @@ with tab_procesar:
 
         st.divider()
 
+        # TARJETA VISUAL DE LA CONCLUSIÓN DIAGNÓSTICA EN PANTALLA
+        st.markdown(f"""
+            <div class="conclusion-box">
+                <b style="color: #13325b; font-size: 1.05rem;">🩺 Conclusión Diagnóstica Generada Automáticamente:</b><br>
+                <div style="margin-top: 0.35rem; color: #1e293b;">
+                    {sintetizar_conclusion_automatica(datos)}
+                </div>
+            </div>
+        """, unsafe_allow_html=True)
+
         col_edicion, col_preview = st.columns([1, 1], gap="large")
 
         with col_edicion:
@@ -853,9 +871,9 @@ with tab_procesar:
             )
             paciente_nombre_archivo = normalizar_nombre_archivo(nombre_confirmado)
 
-            st.subheader("📝 Edición de la Interpretación")
+            st.subheader("📝 Edición de la Interpretación Completa")
             informe_para_grabar = st.text_area(
-                "Edita el texto antes de generar el documento final (la conclusión se ha generado automáticamente):",
+                "Documento completo para inyectar en el PDF:",
                 value=st.session_state.texto_informe,
                 height=350
             )
@@ -899,6 +917,8 @@ with tab_procesar:
                     del st.session_state["datos_actuales"]
                 if "archivo_actual" in st.session_state:
                     del st.session_state["archivo_actual"]
+                if "texto_informe" in st.session_state:
+                    del st.session_state["texto_informe"]
                 st.rerun()
 
         with col_preview:
