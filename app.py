@@ -15,6 +15,15 @@ st.set_page_config(
 )
 
 # ==========================================
+# UTILIDAD: NORMALIZAR NOMBRE DE ARCHIVO
+# ==========================================
+def normalizar_nombre_archivo(nombre):
+    # Remueve comas, puntos y caracteres no válidos; une nombres con guiones bajos
+    limpio = re.sub(r'[^A-Za-z0-9ÁÉÍÓÚáéíóúÑñ\s]', ' ', nombre)
+    limpio = re.sub(r'\s+', '_', limpio).strip('_')
+    return limpio if limpio else "PACIENTE"
+
+# ==========================================
 # BASE DE DATOS LOCAL (HISTORIAL CLÍNICO)
 # ==========================================
 def init_db():
@@ -126,7 +135,7 @@ PERFILES_MEDICOS = {
     "dr.amaya": {
         "clave": "Cardio2025*",
         "nombre_completo": "DR. WILLIAM AMAYA RAMIREZ",
-        "especialidad": "MÉDICO INTERNISTA - CARDIÓLOGO HEMODINAMISTA",
+        "especialidad": "INTERNISTA - CARDIÓLOGO",
         "registro": "RM 79.502.624 SDS"
     },
     "dra.cardio": {
@@ -168,7 +177,6 @@ if not st.session_state.autenticado:
                 st.error("❌ Credenciales incorrectas. Verifica usuario y contraseña.")
     st.stop()
 
-# Perfil del médico conectado
 perfil_activo = PERFILES_MEDICOS[st.session_state.usuario_actual]
 
 # ==========================================
@@ -181,7 +189,7 @@ with st.sidebar:
         cerrar_sesion()
         st.rerun()
     st.divider()
-    st.caption("CENCARDIO - Sistema Clínico Integral v5.1")
+    st.caption("CENCARDIO - Sistema Clínico Integral v5.2")
 
 st.title("🫀 Lectura de Holter Cencardio")
 
@@ -210,7 +218,7 @@ def extraer_datos_spacelabs(pdf_bytes):
     if paciente_match:
         datos["paciente"] = paciente_match.group(1).replace("\n", " ").strip()
     else:
-        datos["paciente"] = "Paciente_Estudio"
+        datos["paciente"] = "PACIENTE_ESTUDIO"
 
     fc_p = re.search(r"Prom\.?\s*(\d{2,3})", texto)
     datos["fc_prom"] = int(fc_p.group(1)) if fc_p else 70
@@ -408,9 +416,9 @@ with tab_procesar:
                 st.session_state.datos_actuales = extraer_datos_spacelabs(bytes_originales)
                 st.session_state.texto_informe = redactar_interpretacion(st.session_state.datos_actuales, perfil_activo)
                 st.session_state.archivo_actual = uploaded_file.name
-                st.session_state.guardado = False
 
         datos = st.session_state.datos_actuales
+        paciente_nombre_archivo = normalizar_nombre_archivo(datos['paciente'])
 
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("FC Promedio", f"{datos['fc_prom']} lpm", f"Mín {datos['fc_min']} | Máx {datos['fc_max']}")
@@ -437,7 +445,7 @@ with tab_procesar:
                 st.download_button(
                     label="📄 DESCARGAR PDF DILIGENCIADO",
                     data=pdf_final,
-                    file_name=f"Holter_{datos['paciente'].replace(' ', '_')}_Firmado.pdf",
+                    file_name=f"{paciente_nombre_archivo}_Holter_Firmado.pdf",
                     mime="application/pdf",
                     type="primary",
                     use_container_width=True
@@ -452,7 +460,7 @@ with tab_procesar:
                         informe_para_grabar,
                         pdf_final
                     )
-                    st.success("✅ Estudio guardado en la base de datos.")
+                    st.success(f"✅ Guardado en archivo clínico: {datos['paciente']}")
 
         with col_preview:
             st.subheader("👁️ Vista Previa Oficial (Página 1)")
@@ -470,21 +478,22 @@ with tab_historial:
     if not historial:
         st.info("Aún no hay estudios archivados en el sistema.")
     else:
-        busqueda = st.text_input("🔍 Buscar por nombre del paciente:", "")
+        busqueda = st.text_input("🔍 Buscar paciente por nombre o apellido:", "")
         
         for item in historial:
             est_id, fecha, pac_nom, fc, sdnn, med, pdf_data = item
             
             if busqueda.lower() in pac_nom.lower():
-                with st.expander(f"🫀 {pac_nom} — {fecha} (Especialista: {med})"):
-                    col_info1, col_info2, col_descarga = st.columns([2, 2, 2])
-                    col_info1.write(f"**FC Media:** {fc} lpm")
-                    col_info2.write(f"**SDNN 24h:** {sdnn} ms")
-                    with col_descarga:
+                nom_archivo_copia = normalizar_nombre_archivo(pac_nom)
+                with st.expander(f"👤 {pac_nom} | 📅 {fecha} | 👨‍⚕️ {med}"):
+                    c_det1, c_det2, c_desc = st.columns([2, 2, 2])
+                    c_det1.write(f"**FC Media:** {fc} lpm")
+                    c_det2.write(f"**SDNN 24h:** {sdnn} ms")
+                    with c_desc:
                         st.download_button(
-                            label="📥 Volver a descargar PDF",
+                            label="📥 Descargar PDF",
                             data=pdf_data,
-                            file_name=f"Holter_{pac_nom.replace(' ', '_')}_Copia.pdf",
+                            file_name=f"{nom_archivo_copia}_Holter_Copia.pdf",
                             mime="application/pdf",
                             key=f"descarga_{est_id}"
                         )
