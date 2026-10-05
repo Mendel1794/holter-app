@@ -1,4 +1,5 @@
 import streamlit as st
+import time
 from google import genai
 from google.genai import types
 
@@ -57,7 +58,6 @@ with st.sidebar:
         st.rerun()
     st.divider()
 
-    # Lee la API Key desde Secrets o desde un campo manual
     api_key = st.secrets.get("GEMINI_API_KEY", "")
     if not api_key:
         api_key = st.text_input("Gemini API Key:", type="password", help="Pega aquí tu clave si no la pusiste en Secrets")
@@ -92,6 +92,33 @@ RM 79.502.624 SDS
 Nota: Sé exacto con los valores numéricos y diagnósticos del documento. No inventes datos que no figuren en las tablas.
 """
 
+def generar_con_reintentos(client, pdf_bytes, prompt):
+    # Lista de modelos alternativos en caso de congestión de servidores
+    modelos = ['gemini-3.8-flash', 'gemini-2.5-pro', 'gemini-2.0-flash']
+    ultimo_error = None
+
+    for modelo in modelos:
+        for intento in range(3):
+            try:
+                response = client.models.generate_content(
+                    model=modelo,
+                    contents=[
+                        types.Part.from_bytes(data=pdf_bytes, mime_type='application/pdf'),
+                        prompt
+                    ]
+                )
+                return response.text
+            except Exception as e:
+                ultimo_error = e
+                err_text = str(e)
+                # Si el servidor está saturado temporalmente (503/UNAVAILABLE), pausa 2s y reintenta
+                if "503" in err_text or "UNAVAILABLE" in err_text or "demand" in err_text:
+                    time.sleep(2)
+                    continue
+                else:
+                    break
+    raise ultimo_error
+
 if uploaded_file is not None:
     if not api_key:
         st.warning("⚠️ Debes configurar la API Key de Gemini en la barra lateral izquierda o en Secrets.")
@@ -102,16 +129,10 @@ if uploaded_file is not None:
                     client = genai.Client(api_key=api_key)
                     pdf_bytes = uploaded_file.getvalue()
 
-                    response = client.models.generate_content(
-                        model='gemini-3.8-flash',
-                        contents=[
-                            types.Part.from_bytes(data=pdf_bytes, mime_type='application/pdf'),
-                            PROMPT_CARDIOLOGIA
-                        ]
-                    )
+                    texto_resultado = generar_con_reintentos(client, pdf_bytes, PROMPT_CARDIOLOGIA)
 
                     st.success("✅ Lectura generada exitosamente.")
-                    informe = st.text_area("Resultado (editable antes de copiar o imprimir):", value=response.text, height=380)
+                    informe = st.text_area("Resultado (editable antes de copiar o imprimir):", value=texto_resultado, height=380)
 
                     st.download_button(
                         label="Descargar Informe (.txt)",
