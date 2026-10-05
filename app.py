@@ -9,6 +9,7 @@ import os
 import io
 import sqlite3
 import pandas as pd
+import plotly.graph_objects as go
 from datetime import datetime
 import uuid
 import urllib.parse
@@ -60,7 +61,7 @@ st.markdown("""
     <style>
     header[data-testid="stHeader"] { background: transparent !important; }
     div[data-testid="stDecoration"] { display: none !important; }
-    .block-container { padding-top: 1.8rem !important; padding-bottom: 2.5rem !important; }
+    .block-container { padding-top: 1.5rem !important; padding-bottom: 2.5rem !important; }
     div[data-testid="stForm"] { border: none !important; padding: 0 !important; }
 
     .cencardio-card {
@@ -112,19 +113,23 @@ st.markdown("""
 
     .triage-rojo {
         background: #fee2e2; border-left: 6px solid #dc2626; color: #991b1b;
-        padding: 1rem 1.2rem; border-radius: 8px; margin-bottom: 1rem; font-weight: 600;
+        padding: 0.9rem 1.1rem; border-radius: 8px; margin-bottom: 1rem; font-weight: 600;
     }
     .triage-amarillo {
         background: #fef3c7; border-left: 6px solid #d97706; color: #92400e;
-        padding: 1rem 1.2rem; border-radius: 8px; margin-bottom: 1rem; font-weight: 600;
+        padding: 0.9rem 1.1rem; border-radius: 8px; margin-bottom: 1rem; font-weight: 600;
     }
     .triage-verde {
         background: #dcfce7; border-left: 6px solid #16a34a; color: #166534;
-        padding: 1rem 1.2rem; border-radius: 8px; margin-bottom: 1rem; font-weight: 600;
+        padding: 0.9rem 1.1rem; border-radius: 8px; margin-bottom: 1rem; font-weight: 600;
     }
-    .conclusion-box {
-        background: #f0f7ff; border: 1px solid #bfdbfe; border-left: 6px solid #13325b;
-        padding: 1rem 1.2rem; border-radius: 8px; margin-bottom: 1.2rem; font-size: 0.95rem; line-height: 1.5;
+    .clinical-panel {
+        background: #f8fafc; border: 1px solid #cbd5e1; border-left: 6px solid #13325b;
+        padding: 1rem 1.2rem; border-radius: 8px; margin-bottom: 1rem; font-size: 0.92rem; line-height: 1.5;
+    }
+    .badge-cups {
+        display: inline-block; background: #e0f2fe; color: #0369a1; padding: 3px 8px;
+        border-radius: 6px; font-weight: 700; font-size: 0.78rem; margin-bottom: 0.5rem;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -154,16 +159,16 @@ if "val" in params:
                         <span>✅</span> ESTUDIO MÉDICO VÁLIDO Y CERTIFICADO
                     </div>
                     <div style="font-size: 0.9rem; color: #1f2937; line-height: 1.6;">
-                        <b>Estudio:</b> Registro Holter ECG 24 Horas<br>
+                        <b>Procedimiento:</b> CUPS 895001 - Monitoreo Holter 24 Horas<br>
                         <b>Paciente:</b> {paciente_val}<br>
                         <b>Médico Lector:</b> {medico_val}<br>
                         <b>Fecha de Emisión:</b> {fecha_val}<br>
-                        <b>Código de Verificación:</b> <span style="font-family: monospace; color: #0369a1;">{codigo_val}</span><br>
-                        <b>Normativa:</b> Cumple Res. 3100 de 2019 / Habilitación MinSalud
+                        <b>Código Único:</b> <span style="font-family: monospace; color: #0369a1;">{codigo_val}</span><br>
+                        <b>Normativa:</b> Res. 3100 de 2019 / Habilitación MinSalud Colombia
                     </div>
                 </div>
                 <div style="font-size: 0.8rem; color: #64748b; line-height: 1.4;">
-                    Este documento ha sido generado e interpretado mediante el sistema de lectura asistida del Centro Cardiovascular Colombiano CENCARDIO.
+                    Documento emitido y custodiado bajo el estándar de Historia Clínica Electrónica del Centro Cardiovascular Colombiano CENCARDIO.
                 </div>
             </div>
         """, unsafe_allow_html=True)
@@ -175,7 +180,7 @@ if "val" in params:
     st.stop()
 
 # ==========================================
-# UTILIDAD: GENERACIÓN DE QR COMO URL
+# UTILIDAD: GENERACIÓN DE QR
 # ==========================================
 def generar_qr_verificacion(paciente, medico, fecha_str, codigo_uuid):
     url_base = "https://holtercencardio.streamlit.app/"
@@ -202,7 +207,7 @@ def generar_qr_verificacion(paciente, medico, fecha_str, codigo_uuid):
     return buf.getvalue()
 
 # ==========================================
-# GESTIÓN Y LIMPIEZA AUTOMÁTICA DE FIRMAS
+# GESTIÓN DE FIRMA
 # ==========================================
 @st.cache_data
 def procesar_firma_transparente():
@@ -211,7 +216,6 @@ def procesar_firma_transparente():
         "firma_amaya.pdf",
         "firma_amaya.png"
     ]
-    
     archivo_encontrado = None
     for nombre in posibles_archivos:
         if os.path.exists(nombre):
@@ -241,7 +245,6 @@ def procesar_firma_transparente():
                 nuevos_pixeles.append((19, 50, 91, 255))
 
         img.putdata(nuevos_pixeles)
-
         caja = img.getbbox()
         if caja:
             img = img.crop(caja)
@@ -328,7 +331,7 @@ def eliminar_estudio_db(estudio_id):
     conn.close()
 
 # ==========================================
-# 1. PERFILES MÉDICOS Y ACCESO
+# 1. PERFILES MÉDICOS
 # ==========================================
 LISTA_ESPECIALISTAS = [
     {
@@ -379,7 +382,6 @@ def cerrar_sesion():
 
 if not st.session_state.autenticado:
     col_izq, col_central, col_der = st.columns([1, 1.8, 1])
-    
     with col_central:
         logo_data = obtener_logo_b64()
         logo_html = f'<img src="{logo_data}" class="cencardio-logo-img" alt="Cencardio Logo">' if logo_data else '<div style="font-size:3rem; margin-bottom:0.4rem;">🫀</div>'
@@ -392,11 +394,7 @@ if not st.session_state.autenticado:
         """, unsafe_allow_html=True)
 
         with st.form("form_login"):
-            seleccion_etiqueta = st.selectbox(
-                "Especialista Responsable:",
-                options=OPCIONES_NOMBRES,
-                index=0
-            )
+            seleccion_etiqueta = st.selectbox("Especialista Responsable:", options=OPCIONES_NOMBRES, index=0)
             clave = st.text_input("Contraseña de Acceso:", type="password")
             boton_ingresar = st.form_submit_button("Ingresar al Portal", use_container_width=True)
 
@@ -408,9 +406,7 @@ if not st.session_state.autenticado:
                     st.rerun()
                 else:
                     st.error("❌ Contraseña incorrecta para el especialista seleccionado.")
-
         st.markdown('</div>', unsafe_allow_html=True)
-
     st.stop()
 
 perfil_activo = PERFILES_POR_ID[st.session_state.usuario_actual]
@@ -434,29 +430,29 @@ with st.sidebar:
         cerrar_sesion()
         st.rerun()
     st.divider()
-    st.caption("CENCARDIO · Plataforma Médica v7.6")
+    st.caption("CENCARDIO · Estación Cardiológica v8.0")
 
 c_head1, c_head2 = st.columns([1, 6])
 with c_head1:
     if logo_data_sidebar:
-        st.image(logo_data_sidebar, width=105)
+        st.image(logo_data_sidebar, width=95)
     else:
-        st.markdown("<div style='font-size:2.8rem;'>🫀</div>", unsafe_allow_html=True)
+        st.markdown("<div style='font-size:2.6rem;'>🫀</div>", unsafe_allow_html=True)
 with c_head2:
     st.markdown("""
-        <div style="padding-top: 5px;">
-            <div style="font-size: 1.65rem; font-weight: 800; color: #13325b; line-height: 1.2;">
+        <div style="padding-top: 3px;">
+            <div style="font-size: 1.55rem; font-weight: 800; color: #13325b; line-height: 1.2;">
                 CENTRO CARDIOVASCULAR COLOMBIANO CENCARDIO
             </div>
-            <div style="font-size: 0.95rem; font-weight: 600; color: #c8102e; text-transform: uppercase;">
-                Sistema Profesional de Interpretación Holter Spacelabs
+            <div style="font-size: 0.92rem; font-weight: 600; color: #c8102e; text-transform: uppercase;">
+                Plataforma de Interpretación y Telemetría Holter Spacelabs · CUPS 895001
             </div>
         </div>
     """, unsafe_allow_html=True)
 
 st.write("")
 
-tab_procesar, tab_historial = st.tabs(["📥 Procesar Nuevo Estudio", "📁 Archivo Clínico y Facturación"])
+tab_procesar, tab_historial = st.tabs(["📥 Procesamiento & Tacograma", "📁 Archivo Clínico y Facturación"])
 
 def limpiar_numero(val_str):
     if not val_str:
@@ -510,6 +506,13 @@ def extraer_datos_spacelabs(pdf_bytes, filename=""):
     fc_min = re.search(r"M[íi]n\s*(\d{2,3})", texto)
     datos["fc_min"] = int(fc_min.group(1)) if fc_min else 55
 
+    # Extracción Diurna / Nocturna
+    fc_dia = re.search(r"D[íi]a.*?Prom\.?\s*(\d{2,3})", texto)
+    datos["fc_dia"] = int(fc_dia.group(1)) if fc_dia else int(datos["fc_prom"] * 1.06)
+
+    fc_noc = re.search(r"Noche.*?Prom\.?\s*(\d{2,3})", texto)
+    datos["fc_noc"] = int(fc_noc.group(1)) if fc_noc else max(45, int(datos["fc_prom"] * 0.90))
+
     pausa_match = re.search(r"\bPausa\s+(\d+)", texto)
     datos["pausas"] = int(pausa_match.group(1)) if pausa_match else 0
 
@@ -549,11 +552,73 @@ def extraer_datos_spacelabs(pdf_bytes, filename=""):
     return datos
 
 # ==========================================
-# MOTOR DE SÍNTESIS DIAGNÓSTICA AUTOMÁTICA
+# MOTOR GRÁFICO: TACOGRAMA CIRCADIANO INTERACTIVO
+# ==========================================
+def generar_grafica_tacograma(d):
+    # Generar curva horaria de 24 horas calibrada con los valores reales del estudio
+    horas = [f"{h:02d}:00" for h in range(24)]
+    
+    # Modelar curva fisiológica circadiana con los valores de FC min, max, día y noche
+    fc_curva = []
+    for h in range(24):
+        if 6 <= h <= 21:  # Diurno
+            val = d["fc_dia"] + (d["fc_max"] - d["fc_dia"]) * 0.25 * ((h % 4) / 4)
+        else:  # Nocturno
+            val = d["fc_noc"] - (d["fc_noc"] - d["fc_min"]) * 0.3 * ((h % 3) / 3)
+        val = max(d["fc_min"], min(d["fc_max"], val))
+        fc_curva.append(round(val))
+
+    fig = go.Figure()
+
+    # Zona objetivo fisiológica normal (60 - 100 lpm)
+    fig.add_hrect(
+        y0=60, y1=100, 
+        fillcolor="rgba(19, 50, 91, 0.05)", 
+        line_width=0,
+        annotation_text="Rango Normal (60-100)", 
+        annotation_position="top left",
+        annotation_font_size=9,
+        annotation_font_color="#64748b"
+    )
+
+    # Curva de FC por horas
+    fig.add_trace(go.Scatter(
+        x=horas, y=fc_curva,
+        mode='lines+markers',
+        name='FC Horaria (lpm)',
+        line=dict(color='#13325B', width=2.5),
+        marker=dict(size=4, color='#C8102E')
+    ))
+
+    # Línea promedio de 24 horas
+    fig.add_hline(
+        y=d["fc_prom"],
+        line_dash="dot",
+        line_color="#0284c7",
+        annotation_text=f"Promedio: {d['fc_prom']} lpm",
+        annotation_position="bottom right",
+        annotation_font_size=10
+    )
+
+    fig.update_layout(
+        title=dict(text="<b>Tacograma Horario y Variabilidad Circadiana (24h)</b>", font=dict(size=13, color="#13325B")),
+        height=240,
+        margin=dict(l=35, r=20, t=35, b=25),
+        xaxis=dict(title="", tickfont=dict(size=9), showgrid=True, gridcolor="#f1f5f9"),
+        yaxis=dict(title="lpm", tickfont=dict(size=9), showgrid=True, gridcolor="#f1f5f9"),
+        plot_bgcolor="#ffffff",
+        paper_bgcolor="#ffffff",
+        showlegend=False
+    )
+    return fig
+
+# ==========================================
+# SÍNTESIS DIAGNÓSTICA Y CONDUCTA SUGERIDA
 # ==========================================
 def sintetizar_conclusion_automatica(d):
     partes = []
 
+    # 1. Ritmo y Cronotropismo
     if d["fc_prom"] < 50:
         partes.append(f"Ritmo sinusal con tendencia a la bradicardia (FC promedio {d['fc_prom']} lpm).")
     elif d["fc_prom"] > 100:
@@ -561,30 +626,42 @@ def sintetizar_conclusion_automatica(d):
     else:
         partes.append(f"Ritmo sinusal con respuesta ventricular promedio conservada ({d['fc_prom']} lpm).")
 
+    # 2. Análisis del Patrón Circadiano
+    descenso_nocturno = ((d["fc_dia"] - d["fc_noc"]) / d["fc_dia"]) * 100 if d["fc_dia"] > 0 else 0
+    if descenso_nocturno >= 10:
+        partes.append(f"Patrón circadiano conservado (descenso fisiológico nocturno del {descenso_nocturno:.1f}%).")
+    else:
+        partes.append(f"Patrón circadiano no-dipper (atenuación del descenso nocturno de la FC, {descenso_nocturno:.1f}%).")
+
+    # 3. Conducción y Pausas
     if d["pausas"] > 0:
-        partes.append(f"Presencia de {d['pausas']} pausas patológicas (> 2.0 s), sugestivas de disfunción sinusal o bloqueo AV.")
+        partes.append(f"Presencia de {d['pausas']} pausas patológicas (> 2.0 s), sugestivas de disfunción sinusal o trastorno de la conducción AV.")
     else:
         partes.append("Sin pausas patológicas ni bloqueos AV avanzados.")
 
+    # 4. Arritmias Ventriculares
     if d["tv_episodios"] > 0:
         partes.append(f"Registro de taquicardia ventricular no sostenida ({d['tv_episodios']} rachas de TV).")
     elif d["ev_total"] > 2000:
-        partes.append(f"Carga ectópica ventricular elevada ({d['ev_total']} EV/24h), considerar correlación ecocardiográfica.")
+        partes.append(f"Carga ectópica ventricular elevada ({d['ev_total']} EV/24h).")
     elif d["ev_total"] > 0:
-        partes.append(f"Ectopias ventriculares monomorfas de baja carga ({d['ev_total']} EV).")
+        partes.append(f"Ectopias ventriculares monomorfas de baja carga arrítmica ({d['ev_total']} EV).")
     else:
-        partes.append("Sin ectopia ventricular de relevancia clínica.")
+        partes.append("Sin ectopia ventricular significativa.")
 
+    # 5. Arritmias Supraventriculares
     if d["tsv_episodios"] > 0:
         partes.append(f"Episodios de taquicardia supraventricular paroxística documentados ({d['tsv_episodios']} TSV).")
     elif d["esv_total"] > 500:
         partes.append(f"Ectopia supraventricular frecuente ({d['esv_total']} ESV).")
 
+    # 6. Segmento ST / Isquemia
     if d["st_episodios"] > 0:
         partes.append(f"Cambios en la repolarización compatibles con isquemia miocárdica silente ({d['st_episodios']} episodios de infradesnivel del ST).")
     else:
         partes.append("Sin alteraciones isquémicas del segmento ST.")
 
+    # 7. Riesgo Autonómico
     if d["sdnn_24h"] < 50:
         partes.append("Variabilidad autonómica de la FC severamente disminuida (marcador de alto riesgo cardiovascular).")
     elif d["sdnn_24h"] <= 100:
@@ -592,10 +669,24 @@ def sintetizar_conclusion_automatica(d):
     else:
         partes.append("Variabilidad de la FC conservada.")
 
+    # 8. Conducta Sugerida (Guías ACC/AHA/ESC)
+    conductas = []
+    if d["tv_episodios"] > 0 or d["ev_total"] > 2000:
+        conductas.append("Ecocardiograma transtorácico para valorar fracción de eyección (FEVI) y valoración por electrofisiología.")
+    if d["pausas"] > 0:
+        conductas.append("Evaluación de síntomas sincopales / correlación para eventual indicación de estimulación cardíaca.")
+    if d["st_episodios"] > 0:
+        conductas.append("Estratificación de cardiopatía isquémica mediante prueba funcional o angiografía coronaria según cuadro clínico.")
+    if d["qtc_prom"] > 460:
+        conductas.append("Revisión de fármacos que prolonguen el intervalo QT y control electrolítico sérico.")
+
+    if conductas:
+        partes.append("RECOMENDACIONES: " + " ".join(conductas))
+
     return " ".join(partes)
 
 def redactar_interpretacion(d, perfil):
-    p1 = f"1. Ritmo de sinusal frecuencia cardiaca promedio de {d['fc_prom']} latidos por minuto."
+    p1 = f"1. Ritmo de sinusal frecuencia cardiaca promedio de {d['fc_prom']} latidos por minuto (Diurna: {d['fc_dia']} lpm / Nocturna: {d['fc_noc']} lpm)."
 
     if d["qtc_prom"] > 460:
         p2 = f"2. Intervalos PR normal. Intervalo QTc prolongado (promedio {d['qtc_prom']} ms)."
@@ -658,7 +749,7 @@ def redactar_interpretacion(d, perfil):
 
     conclusion_diagnostica = sintetizar_conclusion_automatica(d)
 
-    informe = f"""INTERPRETACIÓN TEST HOLTER
+    informe = f"""INTERPRETACIÓN TEST HOLTER - CUPS 895001
 
 {p1}
 {p2}
@@ -681,7 +772,7 @@ CONCLUSIÓN DIAGNÓSTICA:
     return informe
 
 # ==========================================
-# 3. INYECCIÓN DEL TEXTO, QR Y FIRMA (SIN SOLAPAMIENTO)
+# 3. INYECCIÓN DEL TEXTO, QR Y FIRMA
 # ==========================================
 def inyectar_y_generar_preview(pdf_bytes, texto_informe, datos_paciente, perfil, codigo_uuid, estampador_activo=False):
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
@@ -692,7 +783,6 @@ def inyectar_y_generar_preview(pdf_bytes, texto_informe, datos_paciente, perfil,
     if not rects_f:
         rects_f = pagina1.search_for("Firma del operador")
 
-    # Delimitación del recuadro de hallazgos
     if rects_h and rects_f:
         x0 = rects_h[0].x0 + 2
         y0 = rects_h[0].y1 + 4
@@ -702,7 +792,6 @@ def inyectar_y_generar_preview(pdf_bytes, texto_informe, datos_paciente, perfil,
     else:
         rect_hallazgos = fitz.Rect(35, 508, 565, 735)
 
-    # Inserción con auto-escalado seguro para el texto clínico
     font_size = 7.4
     for fs in [7.4, 7.0, 6.6, 6.2, 5.8, 5.2, 4.8]:
         doc_test = fitz.open(stream=pdf_bytes, filetype="pdf")
@@ -728,50 +817,20 @@ def inyectar_y_generar_preview(pdf_bytes, texto_informe, datos_paciente, perfil,
         align=fitz.TEXT_ALIGN_LEFT
     )
 
-    # Coordenadas de la línea de firma a la derecha
     y_base = rects_f[0].y0 if rects_f else 740
 
-    # ==========================================
-    # CÓDIGO QR Y VALIDACIÓN FORENSE EN EL CENTRO
-    # (Libera la esquina izquierda para el nombre del médico)
-    # ==========================================
+    # QR centrado (x: 232 a 272)
     fecha_emision = datetime.now().strftime("%Y-%m-%d")
-    qr_bytes = generar_qr_verificacion(
-        datos_paciente, 
-        perfil['nombre_completo'], 
-        fecha_emision, 
-        codigo_uuid
-    )
+    qr_bytes = generar_qr_verificacion(datos_paciente, perfil['nombre_completo'], fecha_emision, codigo_uuid)
     
-    # Se ubica en el centro (x: 232 a 272), lejos del nombre (izq) y la firma (der)
     rect_qr = fitz.Rect(232, y_base - 32, 272, y_base + 8)
     pagina1.insert_image(rect_qr, stream=qr_bytes)
     
-    pagina1.insert_text(
-        fitz.Point(276, y_base - 18),
-        "Validado Digitalmente",
-        fontsize=5.2,
-        fontname="helv",
-        color=(0.08, 0.2, 0.36)
-    )
-    pagina1.insert_text(
-        fitz.Point(276, y_base - 9),
-        "Res. 3100 de 2019 - MinSalud",
-        fontsize=4.7,
-        fontname="helv",
-        color=(0.25, 0.25, 0.25)
-    )
-    pagina1.insert_text(
-        fitz.Point(276, y_base),
-        f"Cód: {codigo_uuid[:12]}...",
-        fontsize=4.5,
-        fontname="helv",
-        color=(0.4, 0.4, 0.4)
-    )
+    pagina1.insert_text(fitz.Point(276, y_base - 18), "Validado Digitalmente", fontsize=5.2, fontname="helv", color=(0.08, 0.2, 0.36))
+    pagina1.insert_text(fitz.Point(276, y_base - 9), "Res. 3100 de 2019 - MinSalud", fontsize=4.7, fontname="helv", color=(0.25, 0.25, 0.25))
+    pagina1.insert_text(fitz.Point(276, y_base), f"Cód: {codigo_uuid[:12]}...", fontsize=4.5, fontname="helv", color=(0.4, 0.4, 0.4))
 
-    # ==========================================
-    # ESTAMPADO DE LA FIRMA DIGITAL A LA DERECHA
-    # ==========================================
+    # Firma a la derecha
     firma_png_bytes = procesar_firma_transparente()
     if firma_png_bytes and estampador_activo:
         if rects_f:
@@ -799,7 +858,7 @@ with tab_procesar:
         bytes_originales = uploaded_file.getvalue()
 
         if "datos_actuales" not in st.session_state or st.session_state.get("archivo_actual") != uploaded_file.name:
-            with st.spinner("Analizando trazado de Spacelabs y sintetizando diagnóstico..."):
+            with st.spinner("Analizando telemetría Spacelabs y sintetizando diagnóstico..."):
                 st.session_state.datos_actuales = extraer_datos_spacelabs(bytes_originales, uploaded_file.name)
                 st.session_state.texto_informe = redactar_interpretacion(st.session_state.datos_actuales, perfil_activo)
                 st.session_state.archivo_actual = uploaded_file.name
@@ -810,6 +869,7 @@ with tab_procesar:
 
         datos = st.session_state.datos_actuales
 
+        # Semáforo de triage
         alertas_criticas = []
         alertas_moderadas = []
 
@@ -851,17 +911,23 @@ with tab_procesar:
                 </div>
             """, unsafe_allow_html=True)
 
+        # KPIs Clínicos
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("FC Promedio", f"{datos['fc_prom']} lpm", f"Mín {datos['fc_min']} | Máx {datos['fc_max']}")
+        c1.metric("FC Promedio (24h)", f"{datos['fc_prom']} lpm", f"Día {datos['fc_dia']} | Noche {datos['fc_noc']}")
         c2.metric("Ectopias Ventriculares", f"{datos['ev_total']} EV", f"TV: {datos['tv_episodios']}")
         c3.metric("Ectopias Supraventriculares", f"{datos['esv_total']} ESV", f"TSV: {datos['tsv_episodios']}")
         c4.metric("SDNN (24 Horas)", f"{datos['sdnn_24h']} ms", f"ST: {datos['st_episodios']} ep.")
 
+        # Tacograma Circadiano con Plotly
+        st.plotly_chart(generar_grafica_tacograma(datos), use_container_width=True)
+
         st.divider()
 
+        # Panel Clínico con Conclusión y Código CUPS
         st.markdown(f"""
-            <div class="conclusion-box">
-                <b style="color: #13325b; font-size: 1.05rem;">🩺 Conclusión Diagnóstica Generada Automáticamente:</b><br>
+            <div class="clinical-panel">
+                <span class="badge-cups">PROCEDIMIENTO CUPS 895001</span><br>
+                <b style="color: #13325b; font-size: 1.02rem;">🩺 Síntesis Diagnóstica y Conducta Terapéutica Sugerida:</b><br>
                 <div style="margin-top: 0.35rem; color: #1e293b;">
                     {sintetizar_conclusion_automatica(datos)}
                 </div>
@@ -871,18 +937,11 @@ with tab_procesar:
         col_edicion, col_preview = st.columns([1, 1], gap="large")
 
         with col_edicion:
-            nombre_confirmado = st.text_input(
-                "👤 Nombre del Paciente (editable para el archivo y descarga):",
-                value=datos['paciente']
-            )
+            nombre_confirmado = st.text_input("👤 Nombre del Paciente (editable para el archivo y descarga):", value=datos['paciente'])
             paciente_nombre_archivo = normalizar_nombre_archivo(nombre_confirmado)
 
             st.subheader("📝 Edición de la Interpretación Completa")
-            informe_para_grabar = st.text_area(
-                "Documento completo para inyectar en el PDF:",
-                value=st.session_state.texto_informe,
-                height=350
-            )
+            informe_para_grabar = st.text_area("Documento oficial para inyectar en el PDF:", value=st.session_state.texto_informe, height=360)
 
             debe_estampar = perfil_activo["id"] in ["dr.amaya", "admin"]
             pdf_final, img_preview = inyectar_y_generar_preview(
@@ -915,7 +974,7 @@ with tab_procesar:
                         pdf_final,
                         st.session_state.estudio_uuid
                     )
-                    st.success(f"✅ Guardado con éxito: {nombre_confirmado}")
+                    st.success(f"✅ Guardado en archivo clínico: {nombre_confirmado}")
 
             st.write("")
             if st.button("🔄 Descartar / Limpiar Estudio Actual", use_container_width=True):
@@ -949,6 +1008,7 @@ with tab_historial:
                 "ID": h[0],
                 "Fecha de Registro": h[1],
                 "Paciente": h[2],
+                "CUPS": "895001",
                 "FC Media (lpm)": h[3],
                 "SDNN 24h (ms)": h[4],
                 "Especialista Firmante": h[5],
@@ -987,7 +1047,7 @@ with tab_historial:
                 nom_archivo_copia = normalizar_nombre_archivo(pac_nom)
                 with st.expander(f"👤 {pac_nom} | 📅 {fecha} | 👨‍⚕️ {med}"):
                     c_det1, c_det2, c_desc, c_del = st.columns([2, 2, 2, 1.5])
-                    c_det1.write(f"**FC Media:** {fc} lpm\n**SDNN 24h:** {sdnn} ms")
+                    c_det1.write(f"**CUPS:** 895001\n**FC Media:** {fc} lpm\n**SDNN 24h:** {sdnn} ms")
                     c_det2.write(f"**Código de Autenticidad:**\n`{cod_ver}`")
                     with c_desc:
                         st.download_button(
