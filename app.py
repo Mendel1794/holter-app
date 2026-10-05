@@ -24,7 +24,7 @@ def cargar_fondo():
             return f"""
             <style>
             .stApp {{
-                background-image: linear-gradient(rgba(255, 255, 255, 0.88), rgba(255, 255, 255, 0.88)), 
+                background-image: linear-gradient(rgba(255, 255, 255, 0.90), rgba(255, 255, 255, 0.90)), 
                                   url("data:image/{mime};base64,{b64}");
                 background-size: cover;
                 background-position: center;
@@ -57,7 +57,15 @@ st.markdown("""
         border: 1px solid #94a3b8 !important;
         border-radius: 8px !important;
         font-family: monospace !important;
-        font-size: 13.5px !important;
+        font-size: 13px !important;
+    }
+    /* Marco elegante para la vista previa del documento */
+    .preview-container {
+        border: 2px solid #cbd5e1;
+        border-radius: 8px;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        background: white;
+        padding: 6px;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -104,10 +112,10 @@ with st.sidebar:
         cerrar_sesion()
         st.rerun()
     st.divider()
-    st.caption("CENCARDIO - Sistema Spacelabs v3.2")
+    st.caption("CENCARDIO - Sistema Holter Profesional v4.0")
 
 st.title("🫀 Lectura de Holter Cencardio")
-st.write("Carga el archivo PDF de Spacelabs para generar la lectura clínica individualizada.")
+st.write("Carga el archivo PDF de Spacelabs. El sistema extraerá los datos, redactará la lectura y mostrará la vista previa del documento diligenciado.")
 
 uploaded_file = st.file_uploader("Cargar estudio Holter (PDF)", type=["pdf"])
 
@@ -265,31 +273,28 @@ RM 79.502.624 SDS"""
     return informe
 
 # ==========================================
-# 3. INYECCIÓN DINÁMICA CON AUTO-FIT
+# 3. INYECCIÓN Y PREVISUALIZADOR
 # ==========================================
-def inyectar_en_pdf_original(pdf_bytes, texto_informe):
+def inyectar_y_generar_preview(pdf_bytes, texto_informe):
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     pagina1 = doc[0]
 
-    # Búsqueda dinámica de las coordenadas del recuadro
+    # Localización dinámica del recuadro
     rects_h = pagina1.search_for("Hallazgos:")
     rects_f = pagina1.search_for("Firma del médico")
     if not rects_f:
         rects_f = pagina1.search_for("Firma del operador")
 
     if rects_h and rects_f:
-        # Inicia justo debajo de la palabra "Hallazgos:"
         x0 = rects_h[0].x0 + 2
         y0 = rects_h[0].y1 + 4
-        # Termina antes de las líneas de firma
         y1 = rects_f[0].y0 - 10
         x1 = pagina1.rect.width - 36
         rect_hallazgos = fitz.Rect(x0, y0, x1, y1)
     else:
-        # Coordenadas de respaldo si no encuentra el texto base
         rect_hallazgos = fitz.Rect(35, 510, 565, 730)
 
-    # Auto-escalado de fuente: inicia en 8.2 y desciende hasta encajar con holgura
+    # Auto-escalado de fuente
     font_size = 8.2
     exito = False
     while font_size >= 4.5:
@@ -306,7 +311,6 @@ def inyectar_en_pdf_original(pdf_bytes, texto_informe):
             break
         font_size -= 0.3
 
-    # Respaldo secundario si el texto supera la capacidad del bloque
     if not exito:
         y_cursor = rect_hallazgos.y0
         for linea in texto_informe.split("\n"):
@@ -320,12 +324,18 @@ def inyectar_en_pdf_original(pdf_bytes, texto_informe):
                 )
                 y_cursor += 9.5
 
-    pdf_modificado = doc.tobytes()
+    # Renderizar la Página 1 como imagen PNG de alta definición (DPI 150)
+    pix = pagina1.get_pixmap(dpi=150)
+    img_preview = pix.tobytes("png")
+
+    # Documento PDF completo modificado
+    pdf_final_bytes = doc.tobytes()
     doc.close()
-    return pdf_modificado
+
+    return pdf_final_bytes, img_preview
 
 # ==========================================
-# 4. INTERFAZ DE USUARIO
+# 4. INTERFAZ DE USUARIO EN DOS COLUMNAS
 # ==========================================
 if uploaded_file is not None:
     bytes_originales = uploaded_file.getvalue()
@@ -338,27 +348,44 @@ if uploaded_file is not None:
 
     datos = st.session_state.datos_actuales
 
-    st.success("✅ Estudio procesado. Revisa los datos y ajusta el informe si es necesario:")
-
+    # Métricas de verificación clínica
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("FC Promedio", f"{datos['fc_prom']} lpm", f"Mín {datos['fc_min']} | Máx {datos['fc_max']}")
     c2.metric("Ectopias Ventriculares", f"{datos['ev_total']} EV", f"TV: {datos['tv_episodios']}")
     c3.metric("Ectopias Supraventriculares", f"{datos['esv_total']} ESV", f"TSV: {datos['tsv_episodios']}")
     c4.metric("SDNN (24 Horas)", f"{datos['sdnn_24h']} ms", f"ST: {datos['st_episodios']} ep.")
 
-    st.subheader("Informe a estampar en el PDF")
-    informe_para_grabar = st.text_area(
-        "Puedes modificar cualquier línea del texto antes de generar el PDF final:",
-        value=st.session_state.texto_informe,
-        height=320
-    )
+    st.divider()
 
-    pdf_final = inyectar_en_pdf_original(bytes_originales, informe_para_grabar)
+    # Distribución en 2 columnas: Edición a la izquierda, Vista previa a la derecha
+    col_edicion, col_preview = st.columns([1, 1], gap="large")
 
-    st.download_button(
-        label="📄 DESCARGAR PDF OFICIAL DILIGENCIADO",
-        data=pdf_final,
-        file_name=f"Holter_{datos['paciente'].replace(' ', '_')}_Firmado.pdf",
-        mime="application/pdf",
-        type="primary"
-    )
+    with col_edicion:
+        st.subheader("📝 Edición de la Interpretación")
+        informe_para_grabar = st.text_area(
+            "Edita aquí el texto si requieres agregar comentarios (la vista previa se actualizará):",
+            value=st.session_state.texto_informe,
+            height=400
+        )
+
+        # Generar PDF y la imagen de vista previa
+        pdf_final, img_preview = inyectar_y_generar_preview(bytes_originales, informe_para_grabar)
+
+        st.download_button(
+            label="📄 DESCARGAR PDF OFICIAL DILIGENCIADO",
+            data=pdf_final,
+            file_name=f"Holter_{datos['paciente'].replace(' ', '_')}_Firmado.pdf",
+            mime="application/pdf",
+            type="primary",
+            use_container_width=True
+        )
+
+    with col_preview:
+        st.subheader("👁️ Vista Previa en Vivo (Página 1)")
+        st.markdown('<div class="preview-container">', unsafe_allow_html=True)
+        st.image(
+            img_preview, 
+            caption=f"Página 1 - {datos['paciente']}", 
+            use_container_width=True
+        )
+        st.markdown('</div>', unsafe_allow_html=True)
