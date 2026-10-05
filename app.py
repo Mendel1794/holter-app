@@ -11,90 +11,13 @@ import sqlite3
 import pandas as pd
 from datetime import datetime
 import uuid
+import urllib.parse
 
 st.set_page_config(
     page_title="Centro Cardiovascular Colombiano Cencardio",
     page_icon="🫀",
     layout="wide"
 )
-
-# ==========================================
-# UTILIDAD: GENERACIÓN DE CÓDIGO QR
-# ==========================================
-def generar_qr_verificacion(paciente, medico, registro, fecha_str, codigo_uuid):
-    contenido_qr = f"""CENTRO CARDIOVASCULAR COLOMBIANO - CENCARDIO
-ESTUDIO HOLTER 24 HORAS
-Paciente: {paciente}
-Especialista: {medico} ({registro})
-Fecha/Hora Emisión: {fecha_str}
-Código de Autenticidad: {codigo_uuid}
-Estado: Validado y Firmado Digitalmente
-Cumplimiento: Res. 3100 de 2019 / MinSalud Colombia"""
-
-    qr = qrcode.QRCode(
-        version=1,
-        error_correction=qrcode.constants.ERROR_CORRECT_M,
-        box_size=4,
-        border=1,
-    )
-    qr.add_data(contenido_qr)
-    qr.make(fit=True)
-    img_qr = qr.make_image(fill_color="#13325b", back_color="white")
-    
-    buf = io.BytesIO()
-    img_qr.save(buf, format="PNG")
-    return buf.getvalue()
-
-# ==========================================
-# GESTIÓN Y LIMPIEZA AUTOMÁTICA DE FIRMAS
-# ==========================================
-@st.cache_data
-def procesar_firma_transparente():
-    posibles_archivos = [
-        "OR WILIAM ANDA RAMIREZ.pdf",
-        "firma_amaya.pdf",
-        "firma_amaya.png"
-    ]
-    
-    archivo_encontrado = None
-    for nombre in posibles_archivos:
-        if os.path.exists(nombre):
-            archivo_encontrado = nombre
-            break
-            
-    if not archivo_encontrado:
-        return None
-
-    try:
-        if archivo_encontrado.lower().endswith(".pdf"):
-            doc_firma = fitz.open(archivo_encontrado)
-            pix = doc_firma[0].get_pixmap(dpi=300)
-            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-            doc_firma.close()
-        else:
-            img = Image.open(archivo_encontrado)
-
-        img = img.convert("RGBA")
-        datos_pixeles = img.getdata()
-        nuevos_pixeles = []
-
-        for p in datos_pixeles:
-            if p[0] > 185 and p[1] > 185 and p[2] > 185:
-                nuevos_pixeles.append((255, 255, 255, 0))
-            else:
-                nuevos_pixeles.append((19, 50, 91, 255))
-
-        img.putdata(nuevos_pixeles)
-
-        caja = img.getbbox()
-        if caja:
-            img = img.crop(caja)
-
-        buf = io.BytesIO()
-        img.save(buf, format="PNG")
-        return buf.getvalue()
-    except Exception:
-        return None
 
 # ==========================================
 # UTILIDAD: RECURSOS E IDENTIDAD VISUAL
@@ -130,11 +53,6 @@ def cargar_fondo():
     .stApp { background: linear-gradient(140deg, #f0f4f8 0%, #f8fafc 50%, #edf2f7 100%); }
     </style>
     """
-
-def normalizar_nombre_archivo(nombre):
-    limpio = re.sub(r'[^A-Za-z0-9ÁÉÍÓÚáéíóúÑñ\s]', ' ', nombre)
-    limpio = re.sub(r'\s+', '_', limpio).strip('_')
-    return limpio if limpio else "PACIENTE"
 
 st.markdown(cargar_fondo(), unsafe_allow_html=True)
 
@@ -208,7 +126,137 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# BASE DE DATOS LOCAL ULTRA-ROBUSTA
+# 0. MÓDULO PÚBLICO: VALIDACIÓN POR QR
+# ==========================================
+# Si el usuario entra escaneando el QR, se le muestra la pantalla de certificación oficial
+params = st.query_params
+if "val" in params:
+    codigo_val = params.get("val", "N/A")
+    paciente_val = urllib.parse.unquote(params.get("pac", "Paciente"))
+    medico_val = urllib.parse.unquote(params.get("med", "Especialista CENCARDIO"))
+    fecha_val = urllib.parse.unquote(params.get("fec", datetime.now().strftime("%Y-%m-%d")))
+
+    c_v1, c_v2, c_v3 = st.columns([1, 2, 1])
+    with c_v2:
+        logo_data = obtener_logo_b64()
+        logo_html = f'<img src="{logo_data}" class="cencardio-logo-img" alt="Cencardio Logo">' if logo_data else '<div style="font-size:3rem; margin-bottom:0.4rem;">🫀</div>'
+
+        st.markdown(f"""
+            <div class="cencardio-card" style="max-width: 580px;">
+                {logo_html}
+                <div class="cencardio-title">Centro Cardiovascular Colombiano</div>
+                <div class="cencardio-sub">CENCARDIO · Certificado de Autenticidad</div>
+                <div style="background: #ecfdf5; border: 2px solid #10b981; border-radius: 12px; padding: 1.2rem; margin-bottom: 1.5rem; text-align: left;">
+                    <div style="color: #065f46; font-size: 1.1rem; font-weight: 800; margin-bottom: 0.5rem; display: flex; align-items: center; gap: 8px;">
+                        <span>✅</span> ESTUDIO MÉDICO VÁLIDO Y CERTIFICADO
+                    </div>
+                    <div style="font-size: 0.9rem; color: #1f2937; line-height: 1.6;">
+                        <b>Estudio:</b> Registro Holter ECG 24 Horas<br>
+                        <b>Paciente:</b> {paciente_val}<br>
+                        <b>Médico Lector:</b> {medico_val}<br>
+                        <b>Fecha de Emisión:</b> {fecha_val}<br>
+                        <b>Código de Verificación:</b> <span style="font-family: monospace; color: #0369a1;">{codigo_val}</span><br>
+                        <b>Normativa:</b> Cumple Res. 3100 de 2019 / Habilitación MinSalud
+                    </div>
+                </div>
+                <div style="font-size: 0.8rem; color: #64748b; line-height: 1.4;">
+                    Este documento ha sido generado e interpretado mediante el sistema de lectura asistida del Centro Cardiovascular Colombiano CENCARDIO.
+                </div>
+            </div>
+        """, unsafe_allow_html=True)
+        
+        if st.button("Ir al Portal Principal", use_container_width=True):
+            st.query_params.clear()
+            st.rerun()
+
+    st.stop()
+
+# ==========================================
+# UTILIDAD: GENERACIÓN DE QR COMO URL
+# ==========================================
+def generar_qr_verificacion(paciente, medico, fecha_str, codigo_uuid):
+    # Enlace directo que abrirá cualquier celular al escanear
+    url_base = "https://holtercencardio.streamlit.app/"
+    query_string = urllib.parse.urlencode({
+        "val": codigo_uuid[:12],
+        "pac": paciente,
+        "med": medico,
+        "fec": fecha_str
+    })
+    url_completa = f"{url_base}?{query_string}"
+
+    qr = qrcode.QRCode(
+        version=1,
+        error_correction=qrcode.constants.ERROR_CORRECT_M,
+        box_size=4,
+        border=1,
+    )
+    qr.add_data(url_completa)
+    qr.make(fit=True)
+    img_qr = qr.make_image(fill_color="#13325b", back_color="white")
+    
+    buf = io.BytesIO()
+    img_qr.save(buf, format="PNG")
+    return buf.getvalue()
+
+# ==========================================
+# GESTIÓN Y LIMPIEZA AUTOMÁTICA DE FIRMAS
+# ==========================================
+@st.cache_data
+def procesar_firma_transparente():
+    posibles_archivos = [
+        "OR WILIAM ANDA RAMIREZ.pdf",
+        "firma_amaya.pdf",
+        "firma_amaya.png"
+    ]
+    
+    archivo_encontrado = None
+    for nombre in posibles_archivos:
+        if os.path.exists(nombre):
+            archivo_encontrado = nombre
+            break
+            
+    if not archivo_encontrado:
+        return None
+
+    try:
+        if archivo_encontrado.lower().endswith(".pdf"):
+            doc_firma = fitz.open(archivo_encontrado)
+            pix = doc_firma[0].get_pixmap(dpi=300)
+            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            doc_firma.close()
+        else:
+            img = Image.open(archivo_encontrado)
+
+        img = img.convert("RGBA")
+        datos_pixeles = img.getdata()
+        nuevos_pixeles = []
+
+        for p in datos_pixeles:
+            if p[0] > 185 and p[1] > 185 and p[2] > 185:
+                nuevos_pixeles.append((255, 255, 255, 0))
+            else:
+                nuevos_pixeles.append((19, 50, 91, 255))
+
+        img.putdata(nuevos_pixeles)
+
+        caja = img.getbbox()
+        if caja:
+            img = img.crop(caja)
+
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
+    except Exception:
+        return None
+
+def normalizar_nombre_archivo(nombre):
+    limpio = re.sub(r'[^A-Za-z0-9ÁÉÍÓÚáéíóúÑñ\s]', ' ', nombre)
+    limpio = re.sub(r'\s+', '_', limpio).strip('_')
+    return limpio if limpio else "PACIENTE"
+
+# ==========================================
+# BASE DE DATOS LOCAL
 # ==========================================
 def init_db():
     conn = sqlite3.connect("historial_holter.db")
@@ -227,14 +275,11 @@ def init_db():
         )
     """)
     conn.commit()
-
-    # Intentar incorporar la columna si la base de datos es de una versión previa
     try:
         c.execute("ALTER TABLE estudios ADD COLUMN codigo_verificacion TEXT")
         conn.commit()
     except Exception:
         pass
-
     conn.close()
 
 init_db()
@@ -249,7 +294,6 @@ def guardar_estudio_db(nombre, fc, sdnn, medico, texto, pdf_bytes, cod_verif):
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (fecha_actual, nombre, fc, sdnn, medico, texto, pdf_bytes, cod_verif))
     except Exception:
-        # Respaldo si la base de datos aún no tiene la octava columna
         c.execute("""
             INSERT INTO estudios (fecha_registro, paciente_nombre, fc_prom, sdnn, medico_firmante, informe_texto, pdf_blob)
             VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -262,12 +306,10 @@ def obtener_historial_db():
     c = conn.cursor()
     filas = []
     try:
-        # Intento 1: Obtener esquema moderno (8 columnas)
         c.execute("SELECT id, fecha_registro, paciente_nombre, fc_prom, sdnn, medico_firmante, pdf_blob, codigo_verificacion FROM estudios ORDER BY id DESC")
         filas = c.fetchall()
     except Exception:
         try:
-            # Intento 2: Esquema anterior (7 columnas) rellenando la octava con 'N/A'
             c.execute("SELECT id, fecha_registro, paciente_nombre, fc_prom, sdnn, medico_firmante, pdf_blob FROM estudios ORDER BY id DESC")
             filas_anteriores = c.fetchall()
             filas = [(r[0], r[1], r[2], r[3], r[4], r[5], r[6], "N/A") for r in filas_anteriores]
@@ -390,7 +432,7 @@ with st.sidebar:
         cerrar_sesion()
         st.rerun()
     st.divider()
-    st.caption("CENCARDIO · Plataforma Médica v7.2")
+    st.caption("CENCARDIO · Plataforma Médica v7.3")
 
 c_head1, c_head2 = st.columns([1, 6])
 with c_head1:
@@ -635,12 +677,11 @@ def inyectar_y_generar_preview(pdf_bytes, texto_informe, datos_paciente, perfil,
                 )
                 y_cursor += 9.5
 
-    # Estampado del QR
-    fecha_emision = datetime.now().strftime("%Y-%m-%d %H:%M")
+    # Estampado del QR como URL
+    fecha_emision = datetime.now().strftime("%Y-%m-%d")
     qr_bytes = generar_qr_verificacion(
         datos_paciente, 
         perfil['nombre_completo'], 
-        perfil['registro'], 
         fecha_emision, 
         codigo_uuid
     )
@@ -657,7 +698,7 @@ def inyectar_y_generar_preview(pdf_bytes, texto_informe, datos_paciente, perfil,
     )
     pagina1.insert_text(
         fitz.Point(86, 742),
-        f"Cód: {codigo_uuid[:16]}...",
+        f"Cód: {codigo_uuid[:12]}...",
         fontsize=4.8,
         fontname="helv",
         color=(0.3, 0.3, 0.3)
@@ -699,7 +740,6 @@ with tab_procesar:
 
         datos = st.session_state.datos_actuales
 
-        # Semáforo de triage
         alertas_criticas = []
         alertas_moderadas = []
 
