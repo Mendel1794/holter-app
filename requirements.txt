@@ -5,3 +5,4 @@ qrcode
 pandas
 plotly
 openpyxl
+pytesseract
