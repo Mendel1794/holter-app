@@ -1,6 +1,6 @@
 import streamlit as st
 import fitz  # PyMuPDF: motor C++ de lectura y renderizado ultrarrápido
-from PIL import Image
+from PIL import Image, ImageOps
 import qrcode
 import re
 import base64
@@ -9,9 +9,15 @@ import io
 import sqlite3
 import pandas as pd
 import plotly.graph_objects as go
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 import uuid
 import urllib.parse
+
+# Configuración estricta de Zona Horaria de Colombia (UTC-5)
+TZ_COLOMBIA = timezone(timedelta(hours=-5))
+
+def ahora_colombia():
+    return datetime.now(TZ_COLOMBIA)
 
 # Importación segura de openpyxl
 try:
@@ -22,7 +28,7 @@ try:
 except ImportError:
     OPENPYXL_INSTALADO = False
 
-# Importación segura de OCR para escaneo de fotos
+# Importación segura de OCR
 try:
     import pytesseract
     PYTESSERACT_INSTALADO = True
@@ -70,7 +76,6 @@ def cargar_estilos_institucionales():
     div[data-testid="stDecoration"] { display: none !important; }
     .block-container { padding-top: 1.2rem !important; padding-bottom: 2.5rem !important; }
 
-    /* Barra Superior Institucional Hospitalaria */
     .top-hospital-bar {
         background: #ffffff;
         border: 1px solid #e2e8f0;
@@ -98,7 +103,6 @@ def cargar_estilos_institucionales():
         border: 1px solid #a7f3d0;
     }
 
-    /* Pestañas de Consola */
     .stTabs [data-baseweb="tab-list"] {
         gap: 8px;
         background: #ffffff;
@@ -127,7 +131,6 @@ def cargar_estilos_institucionales():
         box-shadow: 0 4px 12px rgba(10, 37, 64, 0.15) !important;
     }
 
-    /* Menú Lateral */
     div[data-testid="stSidebar"] {
         background-color: #ffffff !important;
         border-right: 1px solid #e2e8f0 !important;
@@ -145,7 +148,6 @@ def cargar_estilos_institucionales():
     .specialist-sub { font-size: 0.74rem; color: #93c5fd; font-weight: 600; text-transform: uppercase; margin-top: 2px; }
     .specialist-reg { font-size: 0.72rem; color: #cbd5e1; font-family: 'JetBrains Mono', monospace; margin-top: 6px; }
 
-    /* Tarjetas de Selección */
     div[data-testid="stRadio"] > div { gap: 8px; }
     div[data-testid="stRadio"] label {
         background: #f8fafc;
@@ -165,7 +167,6 @@ def cargar_estilos_institucionales():
         transform: translateY(-1px);
     }
 
-    /* Tarjetas de Métricas */
     div[data-testid="stMetric"] {
         background: #ffffff;
         border: 1px solid #e2e8f0;
@@ -187,7 +188,6 @@ def cargar_estilos_institucionales():
         letter-spacing: 0.4px;
     }
 
-    /* Triage Clínico */
     .triage-rojo {
         background: #fef2f2 !important; border: 1.5px solid #fecaca !important; border-left: 6px solid #dc2626 !important; color: #991b1b !important;
         padding: 1rem 1.3rem !important; border-radius: 12px !important; margin-bottom: 1.2rem !important; font-size: 0.92rem !important; line-height: 1.5 !important;
@@ -205,7 +205,6 @@ def cargar_estilos_institucionales():
         padding: 0.6rem 0.9rem; border-radius: 8px; font-weight: 600; font-size: 0.88rem; margin-bottom: 0.8rem;
     }
 
-    /* Botones Institucionales */
     .stButton > button {
         background-color: #0a2540 !important;
         color: #ffffff !important;
@@ -276,7 +275,7 @@ if "val" in params:
     codigo_val = params.get("val", "N/A")
     paciente_val = urllib.parse.unquote(params.get("pac", "Paciente"))
     medico_val = urllib.parse.unquote(params.get("med", "Especialista CENCARDIO"))
-    fecha_val = urllib.parse.unquote(params.get("fec", datetime.now().strftime("%Y-%m-%d")))
+    fecha_val = urllib.parse.unquote(params.get("fec", ahora_colombia().strftime("%Y-%m-%d")))
     proc_val = urllib.parse.unquote(params.get("proc", "Procedimiento Cardiológico"))
 
     c_v1, c_v2, c_v3 = st.columns([1, 1.8, 1])
@@ -431,7 +430,7 @@ init_db()
 def sincronizar_directorio_dinamica(df):
     conn = sqlite3.connect("historial_cencardio.db")
     c = conn.cursor()
-    fecha_hoy = datetime.now().strftime("%Y-%m-%d %H:%M")
+    fecha_hoy = ahora_colombia().strftime("%Y-%m-%d %H:%M")
     
     col_ced = next((col for col in df.columns if any(k in col.lower() for k in ["cedula", "documento", "identificacion", "id"])), None)
     col_tel = next((col for col in df.columns if any(k in col.lower() for k in ["telefono", "celular", "tel", "movil"])), None)
@@ -471,7 +470,7 @@ def buscar_telefono_dinamica(cedula):
 def guardar_estudio_db(nombre, modalidad, cups, parametro_clave, medico, texto, pdf_bytes, cod_verif):
     conn = sqlite3.connect("historial_cencardio.db")
     c = conn.cursor()
-    fecha_actual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    fecha_actual = ahora_colombia().strftime("%Y-%m-%d %H:%M:%S")
     c.execute("""
         INSERT INTO estudios (fecha_registro, paciente_nombre, modalidad, cups, parametro_clave, medico_firmante, informe_texto, pdf_blob, codigo_verificacion)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -505,7 +504,6 @@ def generar_excel_avanzado_produccion(df_base):
     output = io.BytesIO()
     wb = openpyxl.Workbook()
     
-    # 1. Pestaña: Resumen Ejecutivo y Métricas
     ws_resumen = wb.active
     ws_resumen.title = "📊 Tablero Gerencial"
     ws_resumen.views.sheetView[0].showGridLines = True
@@ -524,7 +522,7 @@ def generar_excel_avanzado_produccion(df_base):
 
     ws_resumen["B2"] = "CENTRO CARDIOVASCULAR COLOMBIANO CENCARDIO"
     ws_resumen["B2"].font = Font(name="Calibri", size=14, bold=True, color="0A2540")
-    ws_resumen["B3"] = f"REPORTE GERENCIAL DE PRODUCCIÓN Y FACTURACIÓN · EMITIDO: {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+    ws_resumen["B3"] = f"REPORTE GERENCIAL DE PRODUCCIÓN Y FACTURACIÓN · EMITIDO: {ahora_colombia().strftime('%d/%m/%Y %H:%M')}"
     ws_resumen["B3"].font = Font(name="Calibri", size=9, bold=True, color="64748B")
 
     ws_resumen["B5"] = "PRODUCCIÓN POR MODALIDAD DIAGNÓSTICA"
@@ -581,7 +579,6 @@ def generar_excel_avanzado_produccion(df_base):
         c_p.alignment = Alignment(horizontal="center")
         r_idx += 1
 
-    # 2. Pestaña: Detalle RIPS y Facturación
     ws_detalle = wb.create_sheet(title="📁 Detalle RIPS y Facturación")
     ws_detalle.views.sheetView[0].showGridLines = True
 
@@ -834,7 +831,7 @@ with st.sidebar:
     if st.button("Cerrar Sesión", use_container_width=True):
         cerrar_sesion()
         st.rerun()
-    st.caption("CENCARDIO · Workstation Enterprise v14.0")
+    st.caption("CENCARDIO · Workstation Enterprise")
 
 # Header institucional superior
 st.markdown("""
@@ -1149,8 +1146,16 @@ def redactar_informe_mapa_cencardio(d, perfil):
     p2 = f"2. Carga tensional sistólica ({d['carga_pas']}%) y diastólica de ({d['carga_pad']}%)"
     p3 = "3. Presión de pulso normal" if d["pp_val"] <= 60 else f"3. Presión de pulso aumentada ({d['pp_val']} mmHg, rigidez arterial)"
 
+    # REGLA EXACTA DE CENCARDIO (DR. WILLIAM AMAYA):
+    # Caída > 0% es dipping positivo; Caída <= 0% es dipping atenuado
     cn = d["caida_nocturna_val"]
-    patron = "dipping positivo" if cn >= 10.0 else "dipping atenuado"
+    if cn > 0.0:
+        patron = "dipping positivo"
+    elif cn <= -10.0:
+        patron = "dipping invertido (riser)"
+    else:
+        patron = "dipping atenuado"
+
     p4 = f"4. Patrón circadiano tensional {patron}"
 
     if d["pas_max_sueno"] >= 145 or d["pad_max_sueno"] >= 95:
@@ -1188,13 +1193,13 @@ def extraer_datos_de_fotos_esfuerzo(archivos_fotos):
     datos = {
         "paciente": "",
         "cedula": "",
-        "edad": 0,
+        "edad": 35,
         "sexo": "Femenino",
         "protocolo": "Bruce",
         "etapa": "Etapa 4",
         "tiempo_min": 0.0,
         "fc_basal": 75,
-        "fc_pico": 0,
+        "fc_pico": 150,
         "pas_basal": 120,
         "pad_basal": 80,
         "pas_pico": 140,
@@ -1213,57 +1218,51 @@ def extraer_datos_de_fotos_esfuerzo(archivos_fotos):
     for f in archivos_fotos:
         try:
             img = Image.open(f)
-            txt = pytesseract.image_to_string(img, lang="spa+eng")
-            texto_acumulado += txt + "\n"
+            img = ImageOps.exif_transpose(img)
+            
+            for angulo in [0, 90]:
+                img_rot = img.rotate(angulo, expand=True) if angulo != 0 else img
+                txt = pytesseract.image_to_string(img_rot, lang="spa+eng")
+                texto_acumulado += txt + "\n"
 
-            # Buscar todas las FC en las fotos
-            for m in re.finditer(r"\bFC\s*[:\.]?\s*(\d{2,3})\b", txt, re.IGNORECASE):
-                fcs_detectadas.append(int(m.group(1)))
+                for m in re.finditer(r"\bFC\s*[:\.]?\s*(\d{2,3})\b", txt, re.IGNORECASE):
+                    fcs_detectadas.append(int(m.group(1)))
 
-            # Buscar todas las PA
-            for m in re.finditer(r"\bPA\s*[:\.]?\s*(\d{2,3})\s*[\/\-]\s*(\d{2,3})\b", txt, re.IGNORECASE):
-                pas_detectadas.append((int(m.group(1)), int(m.group(2))))
+                for m in re.finditer(r"\bPA\s*[:\.]?\s*(\d{2,3})\s*[\/\-]\s*(\d{2,3})\b", txt, re.IGNORECASE):
+                    pas_detectadas.append((int(m.group(1)), int(m.group(2))))
 
-            # Buscar tiempos de fase
-            for m in re.finditer(r"(?:Tiempo|Fase)\s*[:\.]?\s*(\d{1,2})[:\.](\d{2})", txt, re.IGNORECASE):
-                tiempos_detectados.append(float(f"{m.group(1)}.{m.group(2)}"))
+                for m in re.finditer(r"(?:Tiempo|Fase)\s*[:\.]?\s*(\d{1,2})[:\.](\d{2})", txt, re.IGNORECASE):
+                    tiempos_detectados.append(float(f"{m.group(1)}.{m.group(2)}"))
         except Exception:
             continue
 
-    # Paciente
     m_nom = re.search(r"Paciente\s*:\s*([A-ZÁÉÍÓÚÑ\s,]{4,40})", texto_acumulado, re.IGNORECASE)
     if m_nom:
         datos["paciente"] = m_nom.group(1).replace("\n", " ").strip()
 
-    # PID / Cédula
     m_id = re.search(r"(?:PID|ID|C\.?C\.?)\s*[:\.]?\s*(\d{5,12})", texto_acumulado, re.IGNORECASE)
     if m_id:
         datos["cedula"] = m_id.group(1)
 
-    # Edad
     m_edad = re.search(r"Edad\s*[:\.]?\s*(\d{1,3})", texto_acumulado, re.IGNORECASE)
     if m_edad:
         datos["edad"] = int(m_edad.group(1))
 
-    # Sexo
     if re.search(r"Femenino|\bFem\b|\bF\b", texto_acumulado, re.IGNORECASE):
         datos["sexo"] = "Femenino"
     elif re.search(r"Masculino|\bMasc\b|\bM\b", texto_acumulado, re.IGNORECASE):
         datos["sexo"] = "Masculino"
 
-    # FC Pico y Basal
     if fcs_detectadas:
         datos["fc_pico"] = max(fcs_detectadas)
         datos["fc_basal"] = min(fcs_detectadas) if min(fcs_detectadas) > 40 else 75
 
-    # PA Pico y Basal
     if pas_detectadas:
         datos["pas_pico"] = max(p[0] for p in pas_detectadas)
         datos["pad_pico"] = max(p[1] for p in pas_detectadas)
         datos["pas_basal"] = min(p[0] for p in pas_detectadas)
         datos["pad_basal"] = min(p[1] for p in pas_detectadas)
 
-    # Tiempo
     if tiempos_detectados:
         datos["tiempo_min"] = max(tiempos_detectados)
 
@@ -1334,12 +1333,9 @@ RECOMENDACIONES: {recs}
 {perfil['especialidad']}
 {perfil['registro']}"""
 
-# ==============================================================================
-# GENERADOR DEFENSIVO DE EXPEDIENTE ERGOMETRÍA (RESUELVE TYPEERROR)
-# ==============================================================================
 def generar_pdf_ergometria_completo(d, texto_informe, perfil, cod_uuid, imagenes_adjuntas=[]):
     doc = fitz.open()
-    page = doc.new_page(width=612, height=792)  # Carta estándar
+    page = doc.new_page(width=612, height=792)
 
     logo_bytes = None
     for nom in ["cencardio.jpg", "cencardio.png", "cencardio.jpeg", "logo.png", "logo.jpg"]:
@@ -1359,7 +1355,7 @@ def generar_pdf_ergometria_completo(d, texto_informe, perfil, cod_uuid, imagenes
     page.draw_rect(fitz.Rect(36, 95, 576, 155), color=(0.85, 0.9, 0.95), fill=(0.97, 0.98, 1.0), width=1)
     page.insert_text(fitz.Point(46, 112), f"PACIENTE: {d['paciente'].upper()}", fontsize=8.5, fontname="helv", color=(0.04, 0.15, 0.25))
     page.insert_text(fitz.Point(46, 126), f"DOCUMENTO: {d['cedula']}    |    EDAD: {d['edad']} AÑOS    |    SEXO: {d['sexo']}", fontsize=7.5, fontname="helv", color=(0.2, 0.25, 0.3))
-    page.insert_text(fitz.Point(46, 140), f"FECHA DEL ESTUDIO: {datetime.now().strftime('%d/%m/%Y')}    |    MÉDICO LECTOR: {perfil['nombre_completo']}", fontsize=7.5, fontname="helv", color=(0.2, 0.25, 0.3))
+    page.insert_text(fitz.Point(46, 140), f"FECHA DEL ESTUDIO: {ahora_colombia().strftime('%d/%m/%Y')}    |    MÉDICO LECTOR: {perfil['nombre_completo']}", fontsize=7.5, fontname="helv", color=(0.2, 0.25, 0.3))
 
     fcm_prev = 220 - d["edad"] if d["edad"] > 0 else 200
     porc = round((d["fc_pico"] / fcm_prev) * 100) if (fcm_prev > 0 and d["fc_pico"] > 0) else 0
@@ -1382,7 +1378,7 @@ def generar_pdf_ergometria_completo(d, texto_informe, perfil, cod_uuid, imagenes
     page.draw_rect(rect_caja, color=(0.88, 0.91, 0.94), fill=(1, 1, 1), width=1)
     page.insert_textbox(rect_caja, texto_informe, fontsize=6.8, fontname="helv", color=(0.1, 0.15, 0.2), align=fitz.TEXT_ALIGN_LEFT)
 
-    fecha_emision = datetime.now().strftime("%Y-%m-%d")
+    fecha_emision = ahora_colombia().strftime("%Y-%m-%d")
     qr_bytes = generar_qr_verificacion(d['paciente'], perfil['nombre_completo'], fecha_emision, cod_uuid, "CUPS 893805")
     page.insert_image(fitz.Rect(48, 695, 100, 747), stream=qr_bytes)
     page.insert_text(fitz.Point(108, 715), "Certificado Digital Forense", fontsize=6.2, fontname="helv", color=(0.04, 0.15, 0.25))
@@ -1393,14 +1389,14 @@ def generar_pdf_ergometria_completo(d, texto_informe, perfil, cod_uuid, imagenes
     if firma_bytes and perfil["id"] in ["dr.amaya", "admin"]:
         page.insert_image(fitz.Rect(390, 690, 545, 755), stream=firma_bytes)
 
-    # 1. RENDERIZADO PREVIO DE PÁGINA 1 (ANTES DE MODIFICAR EL ÁRBOL DEL DOCUMENTO)
+    # 1. RENDERIZADO PREVIO DE PÁGINA 1
     try:
         pix = page.get_pixmap(dpi=130)
         img_preview = pix.tobytes("png")
     except Exception:
         img_preview = None
 
-    # 2. ADJUNTAR PÁGINAS EXTRA CON LAS FOTOS ESCANEADAS DE LA BANDA
+    # 2. ADJUNTAR PÁGINAS EXTRA CON LAS FOTOS ESCANEADAS
     if imagenes_adjuntas:
         for img_file in imagenes_adjuntas:
             try:
@@ -1429,27 +1425,28 @@ def inyectar_holter_pdf(pdf_bytes, texto_informe, paciente_nom, perfil, cod_uuid
     y0 = (rects_h[0].y1 + 4) if rects_h else 545
     y1 = y_base - 62
 
-    # Blanqueado de caja de texto inferior (sin tocar tablas superiores de arritmias)
-    rect_caja = fitz.Rect(35, y0, pagina1.rect.width - 36, y1)
+    # Blanqueado de margen a margen en la parte inferior de Holter
+    rect_caja = fitz.Rect(0, y0, pagina1.rect.width, y1)
     pagina1.draw_rect(rect_caja, color=None, fill=(1, 1, 1), overlay=True)
+
+    rect_txt_inyeccion = fitz.Rect(35, y0, pagina1.rect.width - 36, y1)
 
     font_size_optimo = 5.6
     for fs in [6.2, 5.9, 5.6, 5.3, 5.0, 4.7, 4.4, 4.2]:
         doc_test = fitz.open(stream=pdf_bytes, filetype="pdf")
         p_test = doc_test[0]
-        rc = p_test.insert_textbox(rect_caja, texto_informe, fontsize=fs, fontname="helv", align=fitz.TEXT_ALIGN_LEFT)
+        rc = p_test.insert_textbox(rect_txt_inyeccion, texto_informe, fontsize=fs, fontname="helv", align=fitz.TEXT_ALIGN_LEFT)
         doc_test.close()
         if rc >= 0:
             font_size_optimo = fs
             break
 
-    pagina1.insert_textbox(rect_caja, texto_informe, fontsize=font_size_optimo, fontname="helv", color=(0, 0, 0), align=fitz.TEXT_ALIGN_LEFT)
+    pagina1.insert_textbox(rect_txt_inyeccion, texto_informe, fontsize=font_size_optimo, fontname="helv", color=(0, 0, 0), align=fitz.TEXT_ALIGN_LEFT)
 
-    # Blanqueado de zona inferior para QR y Firma junto a línea de médico
-    rect_inferior = fitz.Rect(220, y_base - 58, pagina1.rect.width - 36, y_base + 12)
+    rect_inferior = fitz.Rect(220, y_base - 58, pagina1.rect.width, y_base + 12)
     pagina1.draw_rect(rect_inferior, color=None, fill=(1, 1, 1), overlay=True)
 
-    fecha_emision = datetime.now().strftime("%Y-%m-%d")
+    fecha_emision = ahora_colombia().strftime("%Y-%m-%d")
     qr_bytes = generar_qr_verificacion(paciente_nom, perfil['nombre_completo'], fecha_emision, cod_uuid, "CUPS 895001")
     rect_qr = fitz.Rect(230, y_base - 32, 270, y_base + 8)
     pagina1.insert_image(rect_qr, stream=qr_bytes)
@@ -1472,7 +1469,7 @@ def inyectar_holter_pdf(pdf_bytes, texto_informe, paciente_nom, perfil, cod_uuid
     return pdf_final, img_preview
 
 # ==============================================================================
-# INYECCIÓN EXCLUSIVA MAPA SENTINEL (FRANJA MEDIA Y = 235 A 420)
+# INYECCIÓN EXCLUSIVA MAPA SENTINEL (BORRADO TOTAL DE EXTREMO A EXTREMO X=0 A WIDTH)
 # ==============================================================================
 def inyectar_mapa_pdf(pdf_bytes, texto_informe, paciente_nom, perfil, cod_uuid, estampador_activo=False):
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
@@ -1481,14 +1478,15 @@ def inyectar_mapa_pdf(pdf_bytes, texto_informe, paciente_nom, perfil, cod_uuid, 
     rect_m = pagina1.search_for("Presión arterial por la mañana")
     rect_r = pagina1.search_for("Resumen de todo el registro")
 
-    y0 = (rect_m[0].y1 + 4) if rect_m else 235
-    y1 = (rect_r[0].y0 - 6) if rect_r else 420
+    y0 = (rect_m[0].y1 + 2) if rect_m else 230
+    y1 = (rect_r[0].y0 - 4) if rect_r else 425
 
-    # Blanquear franja completa
-    rect_franja = fitz.Rect(35, y0, pagina1.rect.width - 35, y1)
-    pagina1.draw_rect(rect_franja, color=None, fill=(1, 1, 1), overlay=True)
+    # BORRADO TOTAL DE BORDE A BORDE: De x = 0 hasta el ancho total de la hoja
+    # Esto elimina absolutamente cualquier "INTE" o texto residual que haya quedado en el PDF original
+    rect_franja_total = fitz.Rect(0, y0, pagina1.rect.width, y1)
+    pagina1.draw_rect(rect_franja_total, color=None, fill=(1, 1, 1), overlay=True)
 
-    # Inyectar texto en margen izquierdo
+    # Inyección limpia del informe en el margen izquierdo
     rect_texto = fitz.Rect(36, y0 + 2, 440, y1 - 2)
 
     font_size = 6.4
@@ -1504,7 +1502,7 @@ def inyectar_mapa_pdf(pdf_bytes, texto_informe, paciente_nom, perfil, cod_uuid, 
     pagina1.insert_textbox(rect_texto, texto_informe, fontsize=font_size, fontname="helv", color=(0, 0, 0), align=fitz.TEXT_ALIGN_LEFT)
 
     # QR en margen derecho superior
-    fecha_emision = datetime.now().strftime("%Y-%m-%d")
+    fecha_emision = ahora_colombia().strftime("%Y-%m-%d")
     qr_bytes = generar_qr_verificacion(paciente_nom, perfil['nombre_completo'], fecha_emision, cod_uuid, "CUPS 895003")
     rect_qr = fitz.Rect(455, y0 + 6, 505, y0 + 56)
     pagina1.insert_image(rect_qr, stream=qr_bytes)
@@ -1529,28 +1527,24 @@ def inyectar_mapa_pdf(pdf_bytes, texto_informe, paciente_nom, perfil, cod_uuid, 
 # ==========================================
 with tab_procesar:
     # ----------------------------------------------------------
-    # MODALIDAD: PRUEBA DE ESFUERZO (OCR DE FOTOS O ENTRADA MANUAL)
+    # MODALIDAD: PRUEBA DE ESFUERZO (OCR O ENTRADA MANUAL)
     # ----------------------------------------------------------
     if "Esfuerzo" in modalidad_seleccionada:
         st.markdown("#### 🏃 Consola de Emisión de Prueba de Esfuerzo (CUPS 893805)")
-        st.caption("Suba las fotografías del trazado impreso para auto-completar los datos o digítelos en el formulario:")
+        st.caption("Suba las fotos del trazado para auto-completar los datos o digítelos en el formulario:")
 
-        # Inicialización de estado para la prueba de esfuerzo
-        if "erg_datos" not in st.session_state:
-            st.session_state.erg_datos = {
-                "paciente": "",
-                "cedula": "",
-                "edad": 35,
-                "sexo": "Femenino",
-                "protocolo": "Bruce",
-                "etapa": "",
-                "tiempo_min": 0.0,
-                "fc_basal": 75,
-                "fc_pico": 150,
-                "pas_basal": "120/80",
-                "pas_pico": "160/90",
-                "st_mm": 0.0
-            }
+        if "erg_paciente" not in st.session_state: st.session_state.erg_paciente = ""
+        if "erg_cedula" not in st.session_state: st.session_state.erg_cedula = ""
+        if "erg_edad" not in st.session_state: st.session_state.erg_edad = 35
+        if "erg_sexo" not in st.session_state: st.session_state.erg_sexo = "Femenino"
+        if "erg_protocolo" not in st.session_state: st.session_state.erg_protocolo = "Bruce"
+        if "erg_etapa" not in st.session_state: st.session_state.erg_etapa = ""
+        if "erg_tiempo" not in st.session_state: st.session_state.erg_tiempo = 0.0
+        if "erg_fc_basal" not in st.session_state: st.session_state.erg_fc_basal = 75
+        if "erg_fc_pico" not in st.session_state: st.session_state.erg_fc_pico = 150
+        if "erg_pa_basal" not in st.session_state: st.session_state.erg_pa_basal = "120/80"
+        if "erg_pa_pico" not in st.session_state: st.session_state.erg_pa_pico = "160/90"
+        if "erg_st_mm" not in st.session_state: st.session_state.erg_st_mm = 0.0
 
         col_f1, col_f2 = st.columns([1.2, 1], gap="large")
 
@@ -1560,58 +1554,59 @@ with tab_procesar:
                 "📸 Subir fotos o escaneos de las tiras de la banda (JPG o PNG):",
                 type=["jpg", "jpeg", "png"],
                 accept_multiple_files=True,
-                key="fotos_erg_uploader"
+                key="uploader_fotos_erg"
             )
 
-            # Auto-extracción por OCR si se suben fotos nuevas
             if fotos_esfuerzo:
-                if "fotos_procesadas_hash" not in st.session_state or st.session_state.fotos_procesadas_hash != len(fotos_esfuerzo):
+                nombres_fotos = "".join([f.name for f in fotos_esfuerzo])
+                if st.session_state.get("fotos_hash_actual") != nombres_fotos:
                     with st.spinner("Analizando tiras de esfuerzo con motor OCR..."):
-                        datos_ocr = extraer_datos_de_fotos_esfuerzo(fotos_esfuerzo)
-                        for k, v in datos_ocr.items():
-                            if v:
-                                if k in ["pas_basal", "pad_basal"]:
-                                    st.session_state.erg_datos["pas_basal"] = f"{datos_ocr['pas_basal']}/{datos_ocr['pad_basal']}"
-                                elif k in ["pas_pico", "pad_pico"]:
-                                    st.session_state.erg_datos["pas_pico"] = f"{datos_ocr['pas_pico']}/{datos_ocr['pad_pico']}"
-                                else:
-                                    st.session_state.erg_datos[k] = v
-                        st.session_state.fotos_procesadas_hash = len(fotos_esfuerzo)
-                        if datos_ocr.get("paciente") or datos_ocr.get("fc_pico"):
-                            st.toast("✅ Datos clínicos extraídos de las fotos correctamente.", icon="📸")
+                        datos_extraidos = extraer_datos_de_fotos_esfuerzo(fotos_esfuerzo)
+                        if datos_extraidos.get("paciente"): st.session_state.erg_paciente = datos_extraidos["paciente"]
+                        if datos_extraidos.get("cedula"): st.session_state.erg_cedula = datos_extraidos["cedula"]
+                        if datos_extraidos.get("edad"): st.session_state.erg_edad = datos_extraidos["edad"]
+                        if datos_extraidos.get("sexo"): st.session_state.erg_sexo = datos_extraidos["sexo"]
+                        if datos_extraidos.get("fc_pico"): st.session_state.erg_fc_pico = datos_extraidos["fc_pico"]
+                        if datos_extraidos.get("fc_basal"): st.session_state.erg_fc_basal = datos_extraidos["fc_basal"]
+                        if datos_extraidos.get("tiempo_min"): st.session_state.erg_tiempo = datos_extraidos["tiempo_min"]
+                        if datos_extraidos.get("pas_pico"): st.session_state.erg_pa_pico = f"{datos_extraidos['pas_pico']}/{datos_extraidos['pad_pico']}"
+                        if datos_extraidos.get("pas_basal"): st.session_state.erg_pa_basal = f"{datos_extraidos['pas_basal']}/{datos_extraidos['pad_basal']}"
+                        
+                        st.session_state.fotos_hash_actual = nombres_fotos
+                        st.toast("✅ Parámetros leídos de las fotos correctamente.", icon="📸")
+                        st.rerun()
 
             st.write("")
-            st.markdown("<b>2. Verificación de Parámetros Clínicos</b>", unsafe_allow_html=True)
+            st.markdown("<b>2. Parámetros Clínicos</b>", unsafe_allow_html=True)
             c_in1, c_in2, c_in3 = st.columns(3)
             with c_in1:
-                p_nombre = st.text_input("Paciente:", value=st.session_state.erg_datos["paciente"], placeholder="Nombre completo")
-                p_cedula = st.text_input("Cédula / Documento:", value=st.session_state.erg_datos["cedula"], placeholder="Documento ID")
+                p_nombre = st.text_input("Paciente:", key="erg_paciente", placeholder="Nombre completo")
+                p_cedula = st.text_input("Cédula / Documento:", key="erg_cedula", placeholder="Documento ID")
             with c_in2:
-                p_edad = st.number_input("Edad:", value=int(st.session_state.erg_datos["edad"]) if st.session_state.erg_datos["edad"] > 0 else 35, min_value=1, max_value=110)
-                idx_sex = 0 if st.session_state.erg_datos["sexo"] == "Femenino" else 1
-                p_sexo = st.selectbox("Sexo:", ["Femenino", "Masculino"], index=idx_sex)
+                p_edad = st.number_input("Edad:", min_value=1, max_value=110, key="erg_edad")
+                p_sexo = st.selectbox("Sexo:", ["Femenino", "Masculino"], key="erg_sexo")
             with c_in3:
-                p_protocolo = st.selectbox("Protocolo:", ["Bruce", "Bruce Modificado", "Naughton"], index=0)
-                p_etapa = st.text_input("Etapa alcanzada:", value=st.session_state.erg_datos["etapa"], placeholder="Ej: Etapa 6")
+                p_protocolo = st.selectbox("Protocolo:", ["Bruce", "Bruce Modificado", "Naughton"], key="erg_protocolo")
+                p_etapa = st.text_input("Etapa alcanzada:", key="erg_etapa", placeholder="Ej: Etapa 4")
 
             c_in4, c_in5, c_in6 = st.columns(3)
             with c_in4:
-                p_tiempo = st.number_input("Tiempo total (minutos):", value=float(st.session_state.erg_datos["tiempo_min"]), step=0.1)
+                p_tiempo = st.number_input("Tiempo total (min):", step=0.1, key="erg_tiempo")
                 mets_calc = calcular_mets_bruce(p_tiempo)
-                p_mets = st.number_input("Capacidad Funcional (METs):", value=float(mets_calc), step=0.5)
+                p_mets = st.number_input("Capacidad (METs):", value=float(mets_calc), step=0.5)
             with c_in5:
-                p_fc_basal = st.number_input("FC Basal (lpm):", value=int(st.session_state.erg_datos["fc_basal"]))
-                p_fc_pico = st.number_input("FC Pico alcanzada (lpm):", value=int(st.session_state.erg_datos["fc_pico"]))
+                p_fc_basal = st.number_input("FC Basal (lpm):", key="erg_fc_basal")
+                p_fc_pico = st.number_input("FC Pico (lpm):", key="erg_fc_pico")
             with c_in6:
-                p_pa_basal = st.text_input("PA Basal (mmHg):", value=st.session_state.erg_datos["pas_basal"], placeholder="Ej: 119/70")
-                p_pa_pico = st.text_input("PA Esfuerzo Pico (mmHg):", value=st.session_state.erg_datos["pas_pico"], placeholder="Ej: 140/87")
+                p_pa_basal = st.text_input("PA Basal (mmHg):", key="erg_pa_basal")
+                p_pa_pico = st.text_input("PA Esfuerzo Pico (mmHg):", key="erg_pa_pico")
 
             c_in7, c_in8 = st.columns(2)
             with c_in7:
-                p_st_mm = st.number_input("Desviación del ST (mm):", value=float(st.session_state.erg_datos["st_mm"]), step=0.5)
+                p_st_mm = st.number_input("Desviación del ST (mm):", step=0.5, key="erg_st_mm")
             with c_in8:
                 tel_encontrado = buscar_telefono_dinamica(p_cedula) if p_cedula else ""
-                p_celular = st.text_input("Celular (Envío WhatsApp):", value=tel_encontrado)
+                p_celular = st.text_input("Celular (WhatsApp):", value=tel_encontrado)
 
         with col_f2:
             st.markdown("<b>3. Diagnóstico Institucional y Dictamen</b>", unsafe_allow_html=True)
@@ -1690,7 +1685,7 @@ with tab_procesar:
                     st.subheader("👁️ Vista Previa del Certificado Institucional (Página 1)")
                     st.image(img_erg_prev, caption=f"Página 1 - {p_nombre}", width=680)
             else:
-                st.info("💡 Ingrese el nombre del paciente a la izquierda o cargue las fotografías del trazado para generar la prueba.")
+                st.info("💡 Ingrese el nombre del paciente a la izquierda o suba las fotos para procesar la prueba.")
 
     # ----------------------------------------------------------
     # MODALIDAD: ARCHIVOS DIGITALES (PDF DE HOLTER O MAPA SENTINEL)
@@ -1833,7 +1828,6 @@ with tab_procesar:
 
                 debe_estampar = perfil_activo["id"] in ["dr.amaya", "admin"]
 
-                # LLAMADA TOTALMENTE AISLADA SEGÚN EL TIPO DE ESTUDIO
                 if tipo_estudio == "HOLTER":
                     pdf_final, img_preview = inyectar_holter_pdf(
                         bytes_originales,
@@ -1932,7 +1926,6 @@ with tab_historial:
             })
         df_produccion = pd.DataFrame(datos_tabla)
 
-        # Generador de Excel con respaldo automático
         excel_bytes, ext_salida = generar_excel_avanzado_produccion(df_produccion)
         mime_tipo = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" if ext_salida == "xlsx" else "text/csv"
         etiqueta_boton = "📊 DESCARGAR REPORTE EXCEL GERENCIAL (.XLSX)" if ext_salida == "xlsx" else "📊 DESCARGAR REPORTE RIPS (CSV EXCEL)"
@@ -1944,7 +1937,7 @@ with tab_historial:
             st.download_button(
                 label=etiqueta_boton,
                 data=excel_bytes,
-                file_name=f"Reporte_Gerencial_Cencardio_{datetime.now().strftime('%Y%m%d')}.{ext_salida}",
+                file_name=f"Reporte_Gerencial_Cencardio_{ahora_colombia().strftime('%Y%m%d')}.{ext_salida}",
                 mime=mime_tipo,
                 use_container_width=True,
                 type="primary"
@@ -1974,7 +1967,7 @@ with tab_historial:
 
         st.write("")
 
-        # Agrupación por Carpetas Mensuales
+        # Carpetas Mensuales
         meses_grupos = sorted(df_filtrado["Mes_Periodo"].unique().tolist(), reverse=True)
 
         if not meses_grupos:
