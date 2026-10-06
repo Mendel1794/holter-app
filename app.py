@@ -1,6 +1,6 @@
 import streamlit as st
 import fitz  # PyMuPDF: motor C++ de lectura y renderizado ultrarrápido
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, ImageEnhance
 import qrcode
 import re
 import base64
@@ -831,7 +831,7 @@ with st.sidebar:
     if st.button("Cerrar Sesión", use_container_width=True):
         cerrar_sesion()
         st.rerun()
-    st.caption("CENCARDIO · Workstation Enterprise")
+    st.caption("Centro Cardiovascular Colombiano CENCARDIO")
 
 # Header institucional superior
 st.markdown("""
@@ -1146,7 +1146,7 @@ def redactar_informe_mapa_cencardio(d, perfil):
     p2 = f"2. Carga tensional sistólica ({d['carga_pas']}%) y diastólica de ({d['carga_pad']}%)"
     p3 = "3. Presión de pulso normal" if d["pp_val"] <= 60 else f"3. Presión de pulso aumentada ({d['pp_val']} mmHg, rigidez arterial)"
 
-    # REGLA EXACTA DE CENCARDIO (DR. WILLIAM AMAYA):
+    # REGLA INSTITUCIONAL DE CENCARDIO (DR. WILLIAM AMAYA):
     # Caída > 0% es dipping positivo; Caída <= 0% es dipping atenuado
     cn = d["caida_nocturna_val"]
     if cn > 0.0:
@@ -1215,23 +1215,41 @@ def extraer_datos_de_fotos_esfuerzo(archivos_fotos):
     pas_detectadas = []
     tiempos_detectados = []
 
+    # Detectar idiomas disponibles en el entorno de Streamlit Cloud
+    try:
+        langs_disp = pytesseract.get_languages()
+        lang_usar = "spa+eng" if ("spa" in langs_disp and "eng" in langs_disp) else ("eng" if "eng" in langs_disp else None)
+    except Exception:
+        lang_usar = None
+
     for f in archivos_fotos:
         try:
             img = Image.open(f)
-            img = ImageOps.exif_transpose(img)
+            img = ImageOps.exif_transpose(img)  # Corregir orientación EXIF del celular
             
-            for angulo in [0, 90]:
-                img_rot = img.rotate(angulo, expand=True) if angulo != 0 else img
-                txt = pytesseract.image_to_string(img_rot, lang="spa+eng")
+            # Preprocesamiento: Grayscale + aumento de contraste para eliminar interferencia de la cuadrícula
+            img_gray = img.convert("L")
+            enhancer = ImageEnhance.Contrast(img_gray)
+            img_proc = enhancer.enhance(2.0)
+
+            # Probar las 4 rotaciones cardinales (270° es la clave para fotos de tirillas tomadas en vertical)
+            for angulo in [270, 90, 0, 180]:
+                img_rot = img_proc.rotate(angulo, expand=True) if angulo != 0 else img_proc
+                try:
+                    txt = pytesseract.image_to_string(img_rot, lang=lang_usar) if lang_usar else pytesseract.image_to_string(img_rot)
+                except Exception:
+                    txt = pytesseract.image_to_string(img_rot)  # Fallback a inglés por defecto
+                
                 texto_acumulado += txt + "\n"
 
+                # Si detectamos palabras clave en esta orientación, procesamos números
                 for m in re.finditer(r"\bFC\s*[:\.]?\s*(\d{2,3})\b", txt, re.IGNORECASE):
                     fcs_detectadas.append(int(m.group(1)))
 
                 for m in re.finditer(r"\bPA\s*[:\.]?\s*(\d{2,3})\s*[\/\-]\s*(\d{2,3})\b", txt, re.IGNORECASE):
                     pas_detectadas.append((int(m.group(1)), int(m.group(2))))
 
-                for m in re.finditer(r"(?:Tiempo|Fase)\s*[:\.]?\s*(\d{1,2})[:\.](\d{2})", txt, re.IGNORECASE):
+                for m in re.finditer(r"(?:Tiempo|Fase|Time)\s*[:\.]?\s*(\d{1,2})[:\.](\d{2})", txt, re.IGNORECASE):
                     tiempos_detectados.append(float(f"{m.group(1)}.{m.group(2)}"))
         except Exception:
             continue
@@ -1244,7 +1262,7 @@ def extraer_datos_de_fotos_esfuerzo(archivos_fotos):
     if m_id:
         datos["cedula"] = m_id.group(1)
 
-    m_edad = re.search(r"Edad\s*[:\.]?\s*(\d{1,3})", texto_acumulado, re.IGNORECASE)
+    m_edad = re.search(r"Edad\s*:\s*(\d{1,3})", texto_acumulado, re.IGNORECASE)
     if m_edad:
         datos["edad"] = int(m_edad.group(1))
 
@@ -1389,14 +1407,14 @@ def generar_pdf_ergometria_completo(d, texto_informe, perfil, cod_uuid, imagenes
     if firma_bytes and perfil["id"] in ["dr.amaya", "admin"]:
         page.insert_image(fitz.Rect(390, 690, 545, 755), stream=firma_bytes)
 
-    # 1. RENDERIZADO PREVIO DE PÁGINA 1
+    # Renderizado de Página 1 antes de tocar la estructura del documento
     try:
         pix = page.get_pixmap(dpi=130)
         img_preview = pix.tobytes("png")
     except Exception:
         img_preview = None
 
-    # 2. ADJUNTAR PÁGINAS EXTRA CON LAS FOTOS ESCANEADAS
+    # Adjuntar fotos escaneadas como anexos oficiales
     if imagenes_adjuntas:
         for img_file in imagenes_adjuntas:
             try:
@@ -1425,7 +1443,7 @@ def inyectar_holter_pdf(pdf_bytes, texto_informe, paciente_nom, perfil, cod_uuid
     y0 = (rects_h[0].y1 + 4) if rects_h else 545
     y1 = y_base - 62
 
-    # Blanqueado de margen a margen en la parte inferior de Holter
+    # Blanqueado completo de extremo a extremo
     rect_caja = fitz.Rect(0, y0, pagina1.rect.width, y1)
     pagina1.draw_rect(rect_caja, color=None, fill=(1, 1, 1), overlay=True)
 
@@ -1469,7 +1487,7 @@ def inyectar_holter_pdf(pdf_bytes, texto_informe, paciente_nom, perfil, cod_uuid
     return pdf_final, img_preview
 
 # ==============================================================================
-# INYECCIÓN EXCLUSIVA MAPA SENTINEL (BORRADO TOTAL DE EXTREMO A EXTREMO X=0 A WIDTH)
+# INYECCIÓN EXCLUSIVA MAPA SENTINEL (BORRADO TOTAL DE BORDE A BORDE X=0 A WIDTH)
 # ==============================================================================
 def inyectar_mapa_pdf(pdf_bytes, texto_informe, paciente_nom, perfil, cod_uuid, estampador_activo=False):
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
@@ -1481,8 +1499,8 @@ def inyectar_mapa_pdf(pdf_bytes, texto_informe, paciente_nom, perfil, cod_uuid, 
     y0 = (rect_m[0].y1 + 2) if rect_m else 230
     y1 = (rect_r[0].y0 - 4) if rect_r else 425
 
-    # BORRADO TOTAL DE BORDE A BORDE: De x = 0 hasta el ancho total de la hoja
-    # Esto elimina absolutamente cualquier "INTE" o texto residual que haya quedado en el PDF original
+    # BORRADO TOTAL DE BORDE A BORDE (X=0 HASTA WIDTH):
+    # Elimina cualquier texto residual o 'INTE' que venga en el PDF original
     rect_franja_total = fitz.Rect(0, y0, pagina1.rect.width, y1)
     pagina1.draw_rect(rect_franja_total, color=None, fill=(1, 1, 1), overlay=True)
 
@@ -1526,9 +1544,6 @@ def inyectar_mapa_pdf(pdf_bytes, texto_informe, paciente_nom, perfil, cod_uuid, 
 # GESTIÓN DEL ENTORNO DE PROCESAMIENTO
 # ==========================================
 with tab_procesar:
-    # ----------------------------------------------------------
-    # MODALIDAD: PRUEBA DE ESFUERZO (OCR O ENTRADA MANUAL)
-    # ----------------------------------------------------------
     if "Esfuerzo" in modalidad_seleccionada:
         st.markdown("#### 🏃 Consola de Emisión de Prueba de Esfuerzo (CUPS 893805)")
         st.caption("Suba las fotos del trazado para auto-completar los datos o digítelos en el formulario:")
