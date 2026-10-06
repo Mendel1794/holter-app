@@ -12,6 +12,9 @@ import plotly.graph_objects as go
 from datetime import datetime
 import uuid
 import urllib.parse
+import openpyxl
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
 
 st.set_page_config(
     page_title="Centro Cardiovascular Colombiano CENCARDIO · Workstation",
@@ -54,32 +57,35 @@ def cargar_estilos_institucionales():
     div[data-testid="stDecoration"] { display: none !important; }
     .block-container { padding-top: 1.2rem !important; padding-bottom: 2.5rem !important; }
 
-    /* Barra Superior Institucional */
+    /* Barra Superior Institucional Hospitalaria */
     .top-hospital-bar {
         background: #ffffff;
         border: 1px solid #e2e8f0;
         border-radius: 16px;
-        padding: 0.9rem 1.6rem;
+        padding: 1rem 1.6rem;
         display: flex;
         align-items: center;
         justify-content: space-between;
         box-shadow: 0 4px 20px -2px rgba(10, 37, 64, 0.04);
         margin-bottom: 1.5rem;
     }
-    .inst-badge {
-        background: #e0f2fe;
-        color: #0369a1;
-        font-size: 0.72rem;
-        font-weight: 700;
-        padding: 4px 10px;
-        border-radius: 20px;
-        letter-spacing: 0.5px;
-        text-transform: uppercase;
+    .inst-badge-group {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+    }
+    .inst-badge-primary {
+        background: #e0f2fe; color: #0369a1; font-size: 0.72rem; font-weight: 700;
+        padding: 4px 10px; border-radius: 20px; letter-spacing: 0.5px; text-transform: uppercase;
         border: 1px solid #bae6fd;
-        display: inline-block;
+    }
+    .inst-badge-success {
+        background: #ecfdf5; color: #065f46; font-size: 0.72rem; font-weight: 700;
+        padding: 4px 10px; border-radius: 20px; letter-spacing: 0.5px; text-transform: uppercase;
+        border: 1px solid #a7f3d0;
     }
 
-    /* Pestañas de Consola Hospitalaria */
+    /* Pestañas de Consola */
     .stTabs [data-baseweb="tab-list"] {
         gap: 8px;
         background: #ffffff;
@@ -168,7 +174,7 @@ def cargar_estilos_institucionales():
         letter-spacing: 0.4px;
     }
 
-    /* SEMAFORIZACIÓN / TRIAGE CLÍNICO */
+    /* Triage Clínico */
     .triage-rojo {
         background: #fef2f2 !important; border: 1.5px solid #fecaca !important; border-left: 6px solid #dc2626 !important; color: #991b1b !important;
         padding: 1rem 1.3rem !important; border-radius: 12px !important; margin-bottom: 1.2rem !important; font-size: 0.92rem !important; line-height: 1.5 !important;
@@ -234,7 +240,6 @@ def cargar_estilos_institucionales():
         background: #ffffff;
         padding: 8px;
     }
-
     .cencardio-card {
         background: #ffffff;
         border: 1px solid #e2e8f0;
@@ -476,6 +481,137 @@ def eliminar_estudio_db(estudio_id):
     conn.commit()
     conn.close()
 
+# ==============================================================================
+# GENERADOR AVANZADO DE EXCEL INSTITUCIONAL CON FORMATO MULTI-HOJA
+# ==============================================================================
+def generar_excel_avanzado_produccion(df_base):
+    output = io.BytesIO()
+    wb = openpyxl.Workbook()
+    
+    # 1. Pestaña: Resumen Ejecutivo y Métricas
+    ws_resumen = wb.active
+    ws_resumen.title = "📊 Tablero Gerencial"
+    ws_resumen.views.sheetView[0].showGridLines = True
+
+    # Estilos institucionales
+    fill_navy = PatternFill(start_color="0A2540", end_color="0A2540", fill_type="solid")
+    fill_wine = PatternFill(start_color="C8102E", end_color="C8102E", fill_type="solid")
+    fill_light = PatternFill(start_color="F1F5F9", end_color="F1F5F9", fill_type="solid")
+    font_header = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+    font_bold = Font(name="Calibri", size=11, bold=True, color="0A2540")
+    border_thin = Border(
+        left=Side(style='thin', color='CBD5E1'),
+        right=Side(style='thin', color='CBD5E1'),
+        top=Side(style='thin', color='CBD5E1'),
+        bottom=Side(style='thin', color='CBD5E1')
+    )
+
+    # Título institucional
+    ws_resumen["B2"] = "CENTRO CARDIOVASCULAR COLOMBIANO CENCARDIO"
+    ws_resumen["B2"].font = Font(name="Calibri", size=14, bold=True, color="0A2540")
+    ws_resumen["B3"] = f"REPORTE GERENCIAL DE PRODUCCIÓN Y FACTURACIÓN · EMITIDO: {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+    ws_resumen["B3"].font = Font(name="Calibri", size=9, bold=True, color="64748B")
+
+    # Tabla 1: Estudios por Modalidad
+    ws_resumen["B5"] = "PRODUCCIÓN POR MODALIDAD DIAGNÓSTICA"
+    ws_resumen["B5"].font = font_bold
+    headers_mod = ["Modalidad Diagnóstica", "Código CUPS", "Total Estudios", "% Participación"]
+    for col_idx, h in enumerate(headers_mod, start=2):
+        cell = ws_resumen.cell(row=6, column=col_idx, value=h)
+        cell.fill = fill_navy
+        cell.font = font_header
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    prod_mod = df_base.groupby(["Modalidad", "Código CUPS"]).size().reset_index(name="Cantidad")
+    total_estudios = len(df_base)
+    r_idx = 7
+    for _, fila in prod_mod.iterrows():
+        pct = (fila["Cantidad"] / total_estudios) * 100 if total_estudios > 0 else 0
+        ws_resumen.cell(row=r_idx, column=2, value=fila["Modalidad"]).border = border_thin
+        ws_resumen.cell(row=r_idx, column=3, value=fila["Código CUPS"]).border = border_thin
+        c_cant = ws_resumen.cell(row=r_idx, column=4, value=fila["Cantidad"])
+        c_cant.border = border_thin
+        c_cant.alignment = Alignment(horizontal="center")
+        c_pct = ws_resumen.cell(row=r_idx, column=5, value=f"{pct:.1f}%")
+        c_pct.border = border_thin
+        c_pct.alignment = Alignment(horizontal="center")
+        r_idx += 1
+
+    # Totalizador
+    ws_resumen.cell(row=r_idx, column=2, value="TOTAL GENERAL").font = font_bold
+    ws_resumen.cell(row=r_idx, column=4, value=total_estudios).font = font_bold
+    ws_resumen.cell(row=r_idx, column=4).alignment = Alignment(horizontal="center")
+    ws_resumen.cell(row=r_idx, column=5, value="100.0%").font = font_bold
+    ws_resumen.cell(row=r_idx, column=5).alignment = Alignment(horizontal="center")
+    r_idx += 3
+
+    # Tabla 2: Producción Mensual Cronológica
+    ws_resumen.cell(row=r_idx, column=2, value="DISTRIBUCIÓN CRONOLÓGICA POR MESES").font = font_bold
+    r_idx += 1
+    headers_mes = ["Periodo (Año-Mes)", "Total Estudios", "% Producción"]
+    for col_idx, h in enumerate(headers_mes, start=2):
+        cell = ws_resumen.cell(row=r_idx, column=col_idx, value=h)
+        cell.fill = fill_wine
+        cell.font = font_header
+        cell.alignment = Alignment(horizontal="center")
+
+    df_base["Periodo_Mes"] = pd.to_datetime(df_base["Fecha de Registro"]).dt.strftime('%Y-%m')
+    prod_mes = df_base.groupby("Periodo_Mes").size().reset_index(name="Cantidad").sort_values("Periodo_Mes", ascending=False)
+    r_idx += 1
+    for _, fila in prod_mes.iterrows():
+        pct = (fila["Cantidad"] / total_estudios) * 100 if total_estudios > 0 else 0
+        ws_resumen.cell(row=r_idx, column=2, value=fila["Periodo_Mes"]).border = border_thin
+        c_c = ws_resumen.cell(row=r_idx, column=3, value=fila["Cantidad"])
+        c_c.border = border_thin
+        c_c.alignment = Alignment(horizontal="center")
+        c_p = ws_resumen.cell(row=r_idx, column=4, value=f"{pct:.1f}%")
+        c_p.border = border_thin
+        c_p.alignment = Alignment(horizontal="center")
+        r_idx += 1
+
+    # 2. Pestaña: Detalle Completo RIPS
+    ws_detalle = wb.create_sheet(title="📁 Detalle RIPS y Facturación")
+    ws_detalle.views.sheetView[0].showGridLines = True
+
+    columnas_ordenadas = [
+        "ID", "Fecha de Registro", "Periodo_Mes", "Paciente", "Modalidad",
+        "Código CUPS", "Parámetro Clave", "Especialista Firmante", "Código Forense"
+    ]
+    df_exp = df_base[columnas_ordenadas].copy()
+    
+    # Encabezados de detalle
+    headers_detalle = [
+        "N° ID", "Fecha y Hora Registro", "Periodo", "Nombre del Paciente",
+        "Modalidad Diagnóstica", "Código CUPS", "Métrica / Parámetro Clave",
+        "Especialista Lector Responsable", "Código Único Forense (Res. 3100)"
+    ]
+    for col_num, h in enumerate(headers_detalle, 1):
+        cell = ws_detalle.cell(row=1, column=col_num, value=h)
+        cell.fill = fill_navy
+        cell.font = font_header
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        ws_detalle.row_dimensions[1].height = 26
+
+    # Datos fila por fila con bordes y colores alternos
+    for r_idx, fila in enumerate(df_exp.itertuples(index=False), start=2):
+        ws_detalle.row_dimensions[r_idx].height = 20
+        fill_row = fill_light if (r_idx % 2 == 0) else None
+        for c_idx, valor in enumerate(fila, start=1):
+            cell = ws_detalle.cell(row=r_idx, column=c_idx, value=str(valor))
+            cell.border = border_thin
+            if fill_row: cell.fill = fill_row
+            if c_idx in [1, 3, 6]: cell.alignment = Alignment(horizontal="center")
+
+    # Autoajuste automático de anchos de columna en ambas pestañas
+    for ws in [ws_resumen, ws_detalle]:
+        for col in ws.columns:
+            max_len = max(len(str(cell.value or '')) for cell in col)
+            col_letter = get_column_letter(col[0].column)
+            ws.column_dimensions[col_letter].width = max(max_len + 3, 12)
+
+    wb.save(output)
+    return output.getvalue()
+
 # ==========================================
 # 1. PERFILES MÉDICOS OFICIALES
 # ==========================================
@@ -689,9 +825,9 @@ with st.sidebar:
     if st.button("Cerrar Sesión", use_container_width=True):
         cerrar_sesion()
         st.rerun()
-    st.caption("CENCARDIO · Workstation Enterprise v13.0")
+    st.caption("CENCARDIO · Workstation Enterprise v13.5")
 
-# Header institucional superior
+# Header institucional superior con estilo clínico
 st.markdown("""
     <div class="top-hospital-bar">
         <div>
@@ -699,16 +835,17 @@ st.markdown("""
                 CENTRO CARDIOVASCULAR COLOMBIANO CENCARDIO
             </div>
             <div style="font-size: 0.82rem; font-weight: 700; color: #c8102e; text-transform: uppercase;">
-                Estación de Trabajo Diagnóstica · Cardiología No Invasiva
+                Estación Diagnóstica de Cardiología No Invasiva · Alta Complejidad
             </div>
         </div>
-        <div>
-            <span class="inst-badge">Habilitación MinSalud · Res. 3100 de 2019</span>
+        <div class="inst-badge-group">
+            <span class="inst-badge-success">● Sistema en Línea</span>
+            <span class="inst-badge-primary">Habilitación MinSalud · Res. 3100</span>
         </div>
     </div>
 """, unsafe_allow_html=True)
 
-tab_procesar, tab_historial = st.tabs(["📥 Procesamiento del Estudio", "📁 Archivo Clínico y Facturación"])
+tab_procesar, tab_historial = st.tabs(["📥 Procesamiento del Estudio", "📁 Archivo Clínico & Reportes Gerenciales"])
 
 def limpiar_numero(val_str):
     if not val_str:
@@ -1185,7 +1322,6 @@ def inyectar_holter_pdf(pdf_bytes, texto_informe, paciente_nom, perfil, cod_uuid
     y0 = (rects_h[0].y1 + 4) if rects_h else 545
     y1 = y_base - 62
 
-    # 1. Blanquear área exclusiva de texto (sin tocar las tablas superiores)
     rect_caja = fitz.Rect(35, y0, pagina1.rect.width - 36, y1)
     pagina1.draw_rect(rect_caja, color=None, fill=(1, 1, 1), overlay=True)
 
@@ -1201,7 +1337,6 @@ def inyectar_holter_pdf(pdf_bytes, texto_informe, paciente_nom, perfil, cod_uuid
 
     pagina1.insert_textbox(rect_caja, texto_informe, fontsize=font_size_optimo, fontname="helv", color=(0, 0, 0), align=fitz.TEXT_ALIGN_LEFT)
 
-    # 2. Blanquear zona inferior para QR y Firma
     rect_inferior = fitz.Rect(220, y_base - 58, pagina1.rect.width - 36, y_base + 12)
     pagina1.draw_rect(rect_inferior, color=None, fill=(1, 1, 1), overlay=True)
 
@@ -1282,12 +1417,12 @@ def inyectar_mapa_pdf(pdf_bytes, texto_informe, paciente_nom, perfil, cod_uuid, 
 with tab_procesar:
     if "Esfuerzo" in modalidad_seleccionada:
         st.markdown("#### 🏃 Consola de Digitalización y Emisión de Prueba de Esfuerzo (CUPS 893805)")
-        st.caption("Ingrese los datos reales del paciente y de la prueba impresa para procesar el certificado institucional:")
+        st.caption("Ingrese los datos del paciente y de la prueba impresa para emitir el certificado oficial:")
 
         col_f1, col_f2 = st.columns([1.2, 1], gap="large")
 
         with col_f1:
-            st.markdown("<b>1. Parámetros Clínicos de la Prueba Impresa</b>", unsafe_allow_html=True)
+            st.markdown("<b>1. Parámetros Clínicos Extraídos del Trazado Impreso</b>", unsafe_allow_html=True)
             c_in1, c_in2, c_in3 = st.columns(3)
             with c_in1:
                 p_nombre = st.text_input("Nombre del Paciente:", value="", placeholder="Ej: CARLOS MENDOZA")
@@ -1319,15 +1454,15 @@ with tab_procesar:
                 p_celular = st.text_input("Celular (Envío WhatsApp):", value=tel_encontrado)
 
             st.write("")
-            st.markdown("<b>📸 Adjuntar fotos o escaneos de las tirillas:</b>", unsafe_allow_html=True)
+            st.markdown("<b>📸 Adjuntar fotos o escaneos del trazado de la banda:</b>", unsafe_allow_html=True)
             fotos_esfuerzo = st.file_uploader(
-                "Suba las imágenes del trazado impreso para adjuntarlas al PDF final:",
+                "Suba las imágenes del trazado impreso para archivarlas e incrustarlas en el certificado final:",
                 type=["jpg", "jpeg", "png"],
                 accept_multiple_files=True
             )
 
         with col_f2:
-            st.markdown("<b>2. Diagnóstico Institucional y Generación</b>", unsafe_allow_html=True)
+            st.markdown("<b>2. Diagnóstico Institucional y Dictamen</b>", unsafe_allow_html=True)
 
             if p_nombre.strip():
                 pas_b, pad_b = [int(x) for x in p_pa_basal.split("/")] if "/" in p_pa_basal else (120, 80)
@@ -1366,7 +1501,7 @@ with tab_procesar:
                 col_be1, col_be2 = st.columns(2)
                 with col_be1:
                     st.download_button(
-                        label="📄 DESCARGAR CERTIFICADO COMPLETO",
+                        label="📄 DESCARGAR EXPEDIENTE COMPLETO",
                         data=pdf_erg,
                         file_name=f"{normalizar_nombre_archivo(p_nombre)}_Prueba_Esfuerzo.pdf",
                         mime="application/pdf",
@@ -1393,7 +1528,7 @@ with tab_procesar:
                         tel_l = "57" + tel_l
                     
                     url_c = f"https://holtercencardio.streamlit.app/?val={estudio_uuid_erg[:12]}&pac={urllib.parse.quote(p_nombre)}&med={urllib.parse.quote(perfil_activo['nombre_completo'])}&proc=CUPS_893805"
-                    msg_w = f"Estimado(a) paciente {p_nombre}, CENCARDIO le hace entrega de su resultado oficial de Prueba de Esfuerzo (CUPS 893805). Verifique su autenticidad aquí: {url_c}"
+                    msg_w = f"Estimado(a) paciente {p_nombre}, CENCARDIO le hace entrega de su resultado oficial de Prueba de Esfuerzo (CUPS 893805). Puede verificar su autenticidad aquí: {url_c}"
                     wa_u = f"https://wa.me/{tel_l}?text={urllib.parse.quote(msg_w)}"
                     st.write("")
                     st.link_button("📲 ENVIAR RESULTADO POR WHATSAPP", wa_u, use_container_width=True)
@@ -1402,9 +1537,9 @@ with tab_procesar:
                 st.subheader("👁️ Vista Previa del Certificado Institucional (Página 1)")
                 st.image(img_erg_prev, caption=f"Página 1 - {p_nombre}", width=680)
             else:
-                st.info("💡 Digite el nombre del paciente a la izquierda para generar el estudio.")
+                st.info("💡 Digite el nombre del paciente a la izquierda para generar la prueba de esfuerzo.")
 
-    # FLUJO DIGITAL CON ARCHIVO PDF (HOLTER O MAPA CON AUTO-DETECCIÓN)
+    # CASO FLUJO DIGITAL (HOLTER O MAPA CON AUTO-DETECCIÓN INTELIGENTE)
     else:
         st.markdown("#### 📥 Cargar Estudio Digital (PDF de Holter o MAPA)")
         uploaded_file = st.file_uploader("Seleccione el archivo PDF del estudio:", type=["pdf"])
@@ -1543,7 +1678,6 @@ with tab_procesar:
 
                 debe_estampar = perfil_activo["id"] in ["dr.amaya", "admin"]
 
-                # LLAMADA INDEPENDIENTE SEGÚN TIPO DETECTADO
                 if tipo_estudio == "HOLTER":
                     pdf_final, img_preview = inyectar_holter_pdf(
                         bytes_originales,
@@ -1616,15 +1750,15 @@ with tab_procesar:
                 st.image(img_preview, caption=f"Página 1 - {nombre_confirmado} ({cups_actual})", use_container_width=True)
                 st.markdown('</div>', unsafe_allow_html=True)
 
-# ==========================================
-# PESTAÑA 2: ARCHIVO CLÍNICO Y FACTURACIÓN MULTIMODALIDAD
-# ==========================================
+# ==============================================================================
+# PESTAÑA 2: ARCHIVO CLÍNICO POR CARPETAS MENSUALES & EXCEL MULTI-HOJA
+# ==============================================================================
 with tab_historial:
-    st.subheader("📂 Registro de Producción Médica, Facturación y Auditoría")
+    st.markdown("### 📁 Archivo Clínico Digital & Reportes Gerenciales")
     historial = obtener_historial_db()
 
     if not historial:
-        st.info("Aún no hay estudios archivados en el sistema.")
+        st.info("Aún no hay estudios archivados en la base de datos institucional.")
     else:
         datos_tabla = []
         for h in historial:
@@ -1636,55 +1770,94 @@ with tab_historial:
                 "Código CUPS": h[4],
                 "Parámetro Clave": h[5],
                 "Especialista Firmante": h[6],
+                "pdf_data": h[7],
                 "Código Forense": h[8] if len(h) > 8 and h[8] else "N/A"
             })
         df_produccion = pd.DataFrame(datos_tabla)
 
-        col_rep1, col_rep2 = st.columns([3, 1])
+        # Generador Avanzado de Excel con openpyxl
+        excel_bytes = generar_excel_avanzado_produccion(df_produccion)
+
+        col_rep1, col_rep2 = st.columns([2.5, 1.5])
         with col_rep1:
-            busqueda = st.text_input("🔍 Buscar paciente por nombre o documento:", "")
+            st.markdown(f"**Total de estudios en custodia:** `{len(df_produccion)} procedimientos certificados`")
         with col_rep2:
-            st.write("")
-            st.write("")
-            csv_data = df_produccion.to_csv(index=False).encode('utf-8-sig')
             st.download_button(
-                label="📊 Descargar Reporte RIPS / Facturación (CSV)",
-                data=csv_data,
-                file_name=f"Reporte_Produccion_Cencardio_{datetime.now().strftime('%Y%m%d')}.csv",
-                mime="text/csv",
-                use_container_width=True
+                label="📊 DESCARGAR EXCEL GERENCIAL MULTI-HOJA (.XLSX)",
+                data=excel_bytes,
+                file_name=f"Reporte_Gerencial_Cencardio_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+                type="primary"
             )
 
         st.divider()
 
-        for item in historial:
-            est_id = item[0]
-            fecha = item[1]
-            pac_nom = item[2]
-            mod_nom = item[3]
-            cups_cod = item[4]
-            param_clv = item[5]
-            med_firm = item[6]
-            pdf_data = item[7]
-            cod_ver = item[8] if len(item) > 8 and item[8] else "N/A"
-            
-            if busqueda.lower() in pac_nom.lower():
-                nom_archivo_copia = normalizar_nombre_archivo(pac_nom)
-                with st.expander(f"👤 {pac_nom} | 🩺 {mod_nom} ({cups_cod}) | 📅 {fecha} | 👨‍⚕ {med_firm}"):
-                    c_det1, c_det2, c_desc, c_del = st.columns([2.5, 2, 2, 1.5])
-                    c_det1.write(f"**Procedimiento:** {cups_cod}\n**Hallazgo Clave:** {param_clv}")
-                    c_det2.write(f"**Certificado Forense:**\n`{cod_ver}`")
-                    with c_desc:
-                        st.download_button(
-                            label="📥 Descargar Copia PDF",
-                            data=pdf_data,
-                            file_name=f"{nom_archivo_copia}_{cups_cod.replace(' ', '_')}.pdf",
-                            mime="application/pdf",
-                            key=f"descarga_{est_id}",
-                            use_container_width=True
-                        )
-                    with c_del:
-                        if st.button("🗑️ Eliminar", key=f"del_{est_id}", use_container_width=True):
-                            eliminar_estudio_db(est_id)
-                            st.toast(f"Registro de {pac_nom} eliminado.", icon="🗑️")
-                            st.rerun()
+        # Barra de Filtros y Búsqueda
+        c_flt1, c_flt2, c_flt3 = st.columns([1.5, 1.2, 1.3])
+        with c_flt1:
+            busqueda = st.text_input("🔍 Buscar paciente por nombre o documento:", "")
+        with c_flt2:
+            df_produccion["Mes_Periodo"] = pd.to_datetime(df_produccion["Fecha de Registro"]).dt.strftime('%Y-%m')
+            meses_disponibles = ["Todos los meses"] + sorted(df_produccion["Mes_Periodo"].unique().tolist(), reverse=True)
+            mes_seleccionado = st.selectbox("📅 Filtrar por Carpeta Mensual:", meses_disponibles)
+        with c_flt3:
+            modalidades_disp = ["Todas las modalidades"] + sorted(df_produccion["Modalidad"].unique().tolist())
+            mod_seleccionada = st.selectbox("🎛️ Filtrar por Tipo de Estudio:", modalidades_disp)
+
+        # Aplicar filtros
+        df_filtrado = df_produccion.copy()
+        if busqueda.strip():
+            df_filtrado = df_filtrado[df_filtrado["Paciente"].str.contains(busqueda, case=False, na=False)]
+        if mes_seleccionado != "Todos los meses":
+            df_filtrado = df_filtrado[df_filtrado["Mes_Periodo"] == mes_seleccionado]
+        if mod_seleccionada != "Todas las modalidades":
+            df_filtrado = df_filtrado[df_filtrado["Modalidad"] == mod_seleccionada]
+
+        st.write("")
+
+        # Agrupación por Carpetas Mensuales
+        meses_grupos = sorted(df_filtrado["Mes_Periodo"].unique().tolist(), reverse=True)
+
+        if not meses_grupos:
+            st.warning("No se encontraron estudios que coincidan con los criterios de búsqueda.")
+        else:
+            for mes_g in meses_grupos:
+                df_mes = df_filtrado[df_filtrado["Mes_Periodo"] == mes_g]
+                
+                with st.expander(f"📁 CARPETA: {mes_g} ({len(df_mes)} estudios clínicos en custodia)", expanded=True):
+                    for item in df_mes.itertuples():
+                        nom_archivo_copia = normalizar_nombre_archivo(item.Paciente)
+                        
+                        st.markdown(f"""
+                            <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; padding:0.8rem 1.1rem; margin-bottom:0.7rem;">
+                                <div style="display:flex; justify-content:space-between; align-items:center;">
+                                    <div>
+                                        <b style="color:#0a2540; font-size:1.02rem;">👤 {item.Paciente}</b> 
+                                        <span style="background:#e0f2fe; color:#0369a1; font-size:0.72rem; font-weight:700; padding:2px 8px; border-radius:12px; margin-left:6px;">{item.Modalidad} ({item._5})</span>
+                                        <div style="font-size:0.82rem; color:#64748b; margin-top:2px;">
+                                            📅 <b>Registro:</b> {item._2} | 👨‍⚕️ <b>Lector:</b> {item._7} | 🩺 <b>Parámetro:</b> {item._6}
+                                        </div>
+                                    </div>
+                                    <div style="font-family:monospace; font-size:0.75rem; color:#0284c7; font-weight:700;">
+                                        Cód: {item._9[:14]}...
+                                    </div>
+                                </div>
+                            </div>
+                        """, unsafe_allow_html=True)
+                        
+                        c_desc, c_del, c_vacio = st.columns([1.5, 1, 4])
+                        with c_desc:
+                            st.download_button(
+                                label="📥 Descargar Copia PDF",
+                                data=item.pdf_data,
+                                file_name=f"{nom_archivo_copia}_{item._5.replace(' ', '_')}.pdf",
+                                mime="application/pdf",
+                                key=f"desc_{item.ID}",
+                                use_container_width=True
+                            )
+                        with c_del:
+                            if st.button("🗑️ Eliminar", key=f"elim_{item.ID}", use_container_width=True):
+                                eliminar_estudio_db(item.ID)
+                                st.toast(f"Estudio de {item.Paciente} eliminado.", icon="🗑️")
+                                st.rerun()
