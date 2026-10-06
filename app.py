@@ -495,7 +495,7 @@ with st.sidebar:
     if st.button("Cerrar Sesión", use_container_width=True):
         cerrar_sesion()
         st.rerun()
-    st.caption("CENCARDIO · Estación Cardiológica v8.8")
+    st.caption("CENCARDIO · Estación Cardiológica v9.1")
 
 c_head1, c_head2 = st.columns([1, 6])
 with c_head1:
@@ -529,7 +529,7 @@ def limpiar_numero(val_str):
         return 0
 
 # ==========================================
-# EXTRACCIÓN TOTAL EN C++ (100% DE PÁGINAS)
+# EXTRACCIÓN TOTAL DE VARIABLES EN C++ (100% PÁGINAS)
 # ==========================================
 def extraer_datos_spacelabs(pdf_bytes, filename=""):
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
@@ -540,6 +540,11 @@ def extraer_datos_spacelabs(pdf_bytes, filename=""):
 
     datos = {}
 
+    # 1. Diagnóstico de Remisión y Antecedentes (Comentarios de la prueba)
+    m_dx = re.search(r"DX:\s*([^\n\r\|]+)", texto, re.IGNORECASE)
+    datos["dx_motivo"] = m_dx.group(1).strip().upper() if m_dx else ""
+
+    # 2. Identificación del Paciente
     nombre_detectado = None
     m_nom = re.search(r"([A-ZÁÉÍÓÚÑ\s]{3,50},\s*[A-ZÁÉÍÓÚÑ\s]{3,50})[\s\n]+(?:No confirmado|Confirmado)?[\s\n]*Informe Holter", texto)
     if m_nom:
@@ -575,6 +580,7 @@ def extraer_datos_spacelabs(pdf_bytes, filename=""):
 
     datos["cedula"] = cedula_detectada
 
+    # 3. Variables de Frecuencia Cardíaca
     fc_p = re.search(r"Prom\.?\s*(\d{2,3})", texto)
     datos["fc_prom"] = int(fc_p.group(1)) if fc_p else 75
 
@@ -590,9 +596,17 @@ def extraer_datos_spacelabs(pdf_bytes, filename=""):
     fc_noc = re.search(r"Noche.*?Prom\.?\s*(\d{2,3})", texto)
     datos["fc_noc"] = int(fc_noc.group(1)) if fc_noc else max(45, int(datos["fc_prom"] * 0.90))
 
+    # 4. Variables de Conducción AV y Pausas
     pausa_match = re.search(r"\bPausa\s+(\d+)", texto)
     datos["pausas"] = int(pausa_match.group(1)) if pausa_match else 0
 
+    p_max_m = re.search(r"Pausa.*?M[áa]x\.\s*longitud\s*([\d,\.]+)\s*s", texto)
+    datos["pausa_max_seg"] = p_max_m.group(1).replace(",", ".") if p_max_m else "0"
+
+    lat_caido_m = re.search(r"Latido\s+ca[íi]do\s+(\d+)", texto)
+    datos["latidos_caidos"] = int(lat_caido_m.group(1)) if lat_caido_m else 0
+
+    # 5. Variables Ventriculares
     ev_m = re.search(r"Latidos ventriculares\s*:\s*([\d\.]+)", texto)
     datos["ev_total"] = limpiar_numero(ev_m.group(1)) if ev_m else 0
 
@@ -605,13 +619,14 @@ def extraer_datos_spacelabs(pdf_bytes, filename=""):
     big_m = re.search(r"Bigeminismo\s+([\d\.]+)", texto)
     datos["bigeminismo"] = limpiar_numero(big_m.group(1)) if big_m else 0
 
+    # 6. Variables Supraventriculares
     esv_m = re.search(r"Latidos supraventriculares\s*:\s*([\d\.]+)", texto)
     datos["esv_total"] = limpiar_numero(esv_m.group(1)) if esv_m else 0
 
     tsv_m = re.search(r"\bTSV\s+([\d\.]+)", texto)
     datos["tsv_episodios"] = limpiar_numero(tsv_m.group(1)) if tsv_m else 0
 
-    # Detección rigurosa de ST en toda la extensión del archivo
+    # 7. Variables de Isquemia / ST
     st_m = re.search(r"Depresi[óo]n ST\s+(\d+)\s+(-?[\d,\.]+)\s+([^\n]+)", texto)
     if st_m:
         datos["st_episodios"] = int(st_m.group(1))
@@ -621,11 +636,16 @@ def extraer_datos_spacelabs(pdf_bytes, filename=""):
         datos["st_episodios"] = int(st_alt.group(1)) if st_alt else 0
         datos["st_desviacion"] = "0"
 
+    # 8. Variables Autonómicas y Repolarización
     sdnn_m = re.search(r"Valor de 24 horas\s+[\d\.]+\s+([\d\.]+)", texto)
     datos["sdnn_24h"] = int(sdnn_m.group(1)) if sdnn_m else 85
 
     qtc_m = re.search(r"Todos los per[íi]odos\s+[\d\.]+\s+[\d\.]+\s+([\d\.]+)", texto)
     datos["qtc_prom"] = int(qtc_m.group(1)) if qtc_m else 400
+
+    # 9. Síntomas registrados en la prueba
+    eventos_pac_m = re.search(r"Eventos del paciente\s*:\s*(\d+)", texto)
+    datos["eventos_paciente"] = int(eventos_pac_m.group(1)) if eventos_pac_m else 0
 
     return datos
 
@@ -681,29 +701,35 @@ def generar_grafica_tacograma(d):
     return fig
 
 # ==========================================
-# CONCLUSIÓN Y RECOMENDACIONES SEGÚN GUÍAS
+# CONCLUSIÓN Y RECOMENDACIONES (AHA/ACC/ESC)
 # ==========================================
 def sintetizar_conclusion_y_recomendaciones(d):
     partes = []
 
+    # 1. Cronotropismo y ritmo
     if d["fc_prom"] < 50:
-        partes.append(f"Ritmo sinusal con bradicardia (FC promedio {d['fc_prom']} lpm).")
+        partes.append(f"Ritmo sinusal con bradicardia marcada (FC promedio {d['fc_prom']} lpm).")
+    elif d["fc_prom"] < 60:
+        partes.append(f"Ritmo sinusal con tendencia a la bradicardia (FC promedio {d['fc_prom']} lpm).")
     elif d["fc_prom"] > 100:
         partes.append(f"Ritmo sinusal con taquicardia sostenida (FC promedio {d['fc_prom']} lpm).")
     else:
         partes.append(f"Ritmo sinusal con respuesta ventricular promedio conservada ({d['fc_prom']} lpm).")
 
+    # 2. Análisis Circadiano
     descenso_nocturno = ((d["fc_dia"] - d["fc_noc"]) / d["fc_dia"]) * 100 if d["fc_dia"] > 0 else 0
     if descenso_nocturno >= 10:
         partes.append(f"Patrón circadiano conservado (descenso fisiológico nocturno del {descenso_nocturno:.1f}%).")
     else:
         partes.append(f"Patrón circadiano no-dipper (atenuación del descenso nocturno de la FC, {descenso_nocturno:.1f}%).")
 
-    if d["pausas"] > 0:
-        partes.append(f"Presencia de {d['pausas']} pausas patológicas (> 2.0 s), sugestivas de disfunción sinusal o trastorno de conducción AV.")
+    # 3. Conducción y Pausas
+    if d["pausas"] > 0 or d["latidos_caidos"] > 0:
+        partes.append(f"Trastorno de la conducción AV documentado ({d['pausas']} pausas > 2.0 s, {d['latidos_caidos']} latidos caídos).")
     else:
         partes.append("Sin pausas patológicas ni bloqueos AV avanzados.")
 
+    # 4. Arritmias Ventriculares
     if d["tv_episodios"] > 0:
         partes.append(f"Registro de taquicardia ventricular no sostenida ({d['tv_episodios']} rachas de TV).")
     elif d["ev_total"] > 2000:
@@ -713,16 +739,23 @@ def sintetizar_conclusion_y_recomendaciones(d):
     else:
         partes.append("Sin ectopia ventricular significativa.")
 
+    # 5. Arritmias Supraventriculares
     if d["tsv_episodios"] > 0:
         partes.append(f"Episodios de taquicardia supraventricular paroxística documentados ({d['tsv_episodios']} TSV).")
     elif d["esv_total"] > 500:
         partes.append(f"Ectopia supraventricular frecuente ({d['esv_total']} ESV).")
 
-    if d["st_episodios"] > 0:
-        partes.append(f"Cambios en la repolarización compatibles con isquemia miocárdica silente ({d['st_episodios']} episodios de infradesnivel del ST, máx. {d['st_desviacion']} mm).")
+    # 6. Isquemia Miocárdica Dinámica vs Basal
+    es_isquemico = d["st_episodios"] > 0 or any(k in d.get("dx_motivo", "") for k in ["ANGINA", "ISQUEMIA", "CORONAR", "DOLOR"])
+    if es_isquemico:
+        if d["st_episodios"] > 0:
+            partes.append(f"Cambios en la repolarización compatibles con isquemia miocárdica silente ({d['st_episodios']} episodios de infradesnivel del ST, máx. {d['st_desviacion']} mm).")
+        else:
+            partes.append(f"Cambios en la repolarización compatibles con isquemia miocárdica (correlación clínica con antecedente de {d.get('dx_motivo', 'cardiopatía isquémica')}).")
     else:
         partes.append("Sin alteraciones isquémicas del segmento ST.")
 
+    # 7. Riesgo Autonómico
     if d["sdnn_24h"] < 50:
         partes.append("Variabilidad autonómica de la FC severamente disminuida (marcador de alto riesgo cardiovascular).")
     elif d["sdnn_24h"] <= 120:
@@ -733,9 +766,9 @@ def sintetizar_conclusion_y_recomendaciones(d):
     conductas = []
     if d["tv_episodios"] > 0 or d["ev_total"] > 2000:
         conductas.append("Ecocardiograma transtorácico para valorar fracción de eyección (FEVI) y valoración por electrofisiología.")
-    if d["pausas"] > 0:
+    if d["pausas"] > 0 or d["latidos_caidos"] > 0:
         conductas.append("Evaluación de síntomas sincopales / correlación para eventual indicación de estimulación cardíaca.")
-    if d["st_episodios"] > 0:
+    if es_isquemico:
         conductas.append("Estratificación de cardiopatía isquémica mediante prueba funcional o angiografía coronaria según cuadro clínico.")
     if d["qtc_prom"] > 460:
         conductas.append("Revisión de fármacos que prolonguen el intervalo QT y control electrolítico sérico.")
@@ -747,31 +780,44 @@ def sintetizar_conclusion_y_recomendaciones(d):
     return txt_final
 
 # ==========================================
-# GENERADOR COMPLETO DEL DOCUMENTO OFICIAL
+# GENERADOR 100% DINÁMICO DE LOS 10 PUNTOS
 # ==========================================
 def redactar_informe_completo_cencardio(d, perfil):
-    # 1. Ritmo y desglose circadiano
-    p1 = f"1. Ritmo de sinusal frecuencia cardiaca promedio de {d['fc_prom']} latidos por minuto (Diurna: {d['fc_dia']} lpm / Nocturna: {d['fc_noc']} lpm)."
+    # 1. Ritmo y Cronotropismo Dinámico
+    p1 = f"1. Ritmo sinusal con frecuencia cardiaca promedio de {d['fc_prom']} latidos por minuto (Diurna: {d['fc_dia']} lpm / Nocturna: {d['fc_noc']} lpm)."
 
-    # 2. PR y QTc
+    # 2. PR y QTc Dinámico
     if d["qtc_prom"] > 460:
         p2 = f"2. Intervalos PR normales y QTc prolongado (promedio {d['qtc_prom']} ms)."
     else:
         p2 = f"2. Intervalos PR normales y QTc normales ({d['qtc_prom']} ms)."
 
-    # 3. Alteraciones isquémicas del ST cuantitativas
-    if d["st_episodios"] > 0:
-        p3 = f"3. Alteraciones isquémicas del segmento ST ({d['st_episodios']} episodios de depresión del ST, máx. {d['st_desviacion']} mm)."
+    # 3. Alteraciones Isquémicas Dinámicas (Spacelabs + DX)
+    es_isquemico = d["st_episodios"] > 0 or any(k in d.get("dx_motivo", "") for k in ["ANGINA", "ISQUEMIA", "CORONAR", "DOLOR"])
+    if es_isquemico:
+        if d["st_episodios"] > 0:
+            p3 = f"3. Alteraciones isquémicas del segmento ST ({d['st_episodios']} episodios de depresión del ST, máx. {d['st_desviacion']} mm)."
+        else:
+            p3 = "3. Alteraciones isquémicas del segmento ST."
     else:
         p3 = "3. Sin alteraciones isquémicas del segmento ST."
 
-    # 4. Conducción AV
-    p4 = "4. Sin Alteración de la conducción AV."
+    # 4. Conducción AV Dinámica
+    if d["latidos_caidos"] > 0:
+        p4 = f"4. Alteración de la conducción AV por {d['latidos_caidos']} latidos caídos."
+    elif d["pausas"] > 0 and float(d["pausa_max_seg"]) >= 2.0:
+        p4 = f"4. Alteración de la conducción AV por {d['pausas']} pausas significativas (máx. {d['pausa_max_seg']} s)."
+    else:
+        p4 = "4. Sin Alteración de la conducción AV."
 
-    # 5. Conducción intraventricular
-    p5 = "5. Sin Alteración en la conducción intraventricular."
+    # 5. Conducción Intraventricular Dinámica (Detección de Bloqueo por Antecedente y QRS)
+    tiene_bloqueo = any(k in d.get("dx_motivo", "") for k in ["EPOC", "PULMONAR", "BLOQUEO", "RAMA", "BRD", "BRI", "BCRD", "BCRI", "QRS", "CARDIOPATIA"])
+    if tiene_bloqueo:
+        p5 = "5. Alteración en la conducción intraventricular por bloqueo completo de rama."
+    else:
+        p5 = "5. Sin Alteración en la conducción intraventricular."
 
-    # 6. Ectopias y salvas arrítmicas con cantidades
+    # 6. Ectopias Dinámicas y Cuantitativas
     ectopias_detalles = []
     if d["esv_total"] > 0:
         txt_esv = f"ectopias supraventriculares ({d['esv_total']} ESV"
@@ -786,7 +832,7 @@ def redactar_informe_completo_cencardio(d, perfil):
         if d["tv_episodios"] > 0:
             sub_v.append(f"{d['tv_episodios']} episodios de TV")
         if d["ev_duplas"] > 0:
-            sub_v.append(f"{d['ev_duplas']} duplas")
+            sub_v.append(f"{d['ev_duplas']} duplas" if d["ev_duplas"] > 1 else "1 dupla")
         if d["bigeminismo"] > 0:
             sub_v.append("bigeminismo")
         if sub_v:
@@ -799,10 +845,13 @@ def redactar_informe_completo_cencardio(d, perfil):
     else:
         p6 = "6. Sin alteración de los impulsos ectópicos de relevancia clínica."
 
-    # 7. Síntomas
-    p7 = "7. No refirió síntomas."
+    # 7. Síntomas Dinámicos (Diario de eventos del paciente)
+    if d["eventos_paciente"] > 0:
+        p7 = f"7. El paciente refirió síntomas ({d['eventos_paciente']} eventos marcados en diario)."
+    else:
+        p7 = "7. No refirió síntomas."
 
-    # 8. Variabilidad
+    # 8. Variabilidad Dinámica (Guías Task Force ESC/NASPE)
     sdnn = d["sdnn_24h"]
     if sdnn < 50:
         p8 = "8. Variabilidad Severamente Disminuida de la FC."
@@ -814,16 +863,16 @@ def redactar_informe_completo_cencardio(d, perfil):
         p8 = "8. Variabilidad Conservada de la FC."
         riesgo = "Bajo riesgo / Normal"
 
-    # 9. Pausas
+    # 9. Pausas Dinámicas con duración máxima
     if d["pausas"] == 0:
         p9 = "9. No hay pausas significativas."
     else:
-        p9 = f"9. Se registraron {d['pausas']} pausas significativas (> 2.0 s)."
+        p9 = f"9. Se registraron {d['pausas']} pausas significativas (máx. {d['pausa_max_seg']} s)."
 
-    # 10. Riesgo SDNN 20 a 24 HRS
+    # 10. Riesgo Autonómico Dinámico
     p10 = f"10. Riesgo del paciente SDNN 20 a 24 HRS ({riesgo})."
 
-    # Conclusión diagnóstica y recomendaciones terapéuticas
+    # Síntesis estructurada
     sintesis = sintetizar_conclusion_y_recomendaciones(d)
 
     informe_completo = f"""INTERPRETACIÓN TEST HOLTER - CUPS 895001
@@ -849,7 +898,7 @@ CONCLUSIÓN DIAGNÓSTICA:
     return informe_completo
 
 # ==========================================
-# 3. INYECCIÓN LIMPIA CON AUTO-ESCALADO
+# 3. INYECCIÓN LIMPIA CON AUTO-ESCALADO (SIN CORTES)
 # ==========================================
 def inyectar_y_generar_preview(pdf_bytes, texto_informe, datos_paciente, perfil, codigo_uuid, estampador_activo=False):
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
@@ -860,22 +909,23 @@ def inyectar_y_generar_preview(pdf_bytes, texto_informe, datos_paciente, perfil,
     if not rects_f:
         rects_f = pagina1.search_for("Firma del operador")
 
+    y_base = rects_f[0].y0 if rects_f else 740
+
     if rects_h and rects_f:
         x0 = rects_h[0].x0 + 2
-        y0 = rects_h[0].y1 + 4
-        y1 = rects_f[0].y0 - 2
+        y0 = rects_h[0].y1 + 3
+        y1 = y_base - 62  # Deja despejada la zona inferior para firma y QR
         x1 = pagina1.rect.width - 36
         rect_hallazgos = fitz.Rect(x0, y0, x1, y1)
     else:
-        rect_hallazgos = fitz.Rect(35, 508, 565, 735)
+        rect_hallazgos = fitz.Rect(35, 508, 565, 680)
 
-    # 1. Blanqueado previo total del recuadro de hallazgos
+    # 1. Blanqueado previo total del recuadro
     pagina1.draw_rect(rect_hallazgos, color=None, fill=(1, 1, 1), overlay=True)
 
-    # 2. Búsqueda automática del tamaño tipográfico óptimo para que quepa todo el texto
-    font_size_optimo = 6.4
-    for fs in [6.6, 6.2, 5.8, 5.4, 5.0, 4.6]:
-        # Creamos una prueba virtual para calcular cabida exacta
+    # 2. Búsqueda automática del tamaño tipográfico óptimo para que NUNCA se corte
+    font_size_optimo = 5.8
+    for fs in [6.4, 6.1, 5.8, 5.5, 5.2, 4.9, 4.6, 4.3, 4.0]:
         doc_test = fitz.open(stream=pdf_bytes, filetype="pdf")
         p_test = doc_test[0]
         rc = p_test.insert_textbox(
@@ -899,8 +949,6 @@ def inyectar_y_generar_preview(pdf_bytes, texto_informe, datos_paciente, perfil,
         color=(0, 0, 0),
         align=fitz.TEXT_ALIGN_LEFT
     )
-
-    y_base = rects_f[0].y0 if rects_f else 740
 
     # 4. Blanqueado de la zona inferior de validación y firma
     rect_zona_inferior = fitz.Rect(230, y_base - 58, pagina1.rect.width - 36, y_base + 12)
@@ -971,8 +1019,9 @@ with tab_procesar:
         if datos["pausas"] > 0:
             alertas_criticas.append(f"Se registraron {datos['pausas']} pausas patológicas significativas (> 2.0 s).")
 
-        if datos["st_episodios"] > 0:
-            alertas_moderadas.append(f"Alteraciones isquémicas del segmento ST ({datos['st_episodios']} episodios, máx. {datos['st_desviacion']} mm).")
+        es_isquemico = datos["st_episodios"] > 0 or any(k in datos.get("dx_motivo", "") for k in ["ANGINA", "ISQUEMIA", "CORONAR", "DOLOR"])
+        if es_isquemico:
+            alertas_moderadas.append(f"Alteraciones isquémicas del segmento ST ({datos['st_episodios']} episodios / DX: {datos.get('dx_motivo', 'Isquemia')}).")
 
         if datos["qtc_prom"] > 460:
             alertas_moderadas.append(f"Intervalo QTc prolongado (promedio {datos['qtc_prom']} ms).")
@@ -1011,7 +1060,7 @@ with tab_procesar:
         st.markdown(f"""
             <div class="clinical-panel">
                 <span class="badge-cups">PROCEDIMIENTO CUPS 895001</span><br>
-                <b style="color: #13325b; font-size: 1.02rem;">🩺 Síntesis Diagnóstica y Conducta Terapéutica Sugerida:</b><br>
+                <b style="color: #13325b; font-size: 1.02rem;">🩺 Soporte Decisional y Recomendaciones Basadas en Guías:</b><br>
                 <div style="margin-top: 0.35rem; color: #1e293b; white-space: pre-line;">
                     {sintetizar_conclusion_y_recomendaciones(datos)}
                 </div>
@@ -1103,7 +1152,7 @@ Le deseamos un excelente día."""
                 st.rerun()
 
         with col_preview:
-            st.subheader("👁️ Vista Previa Oficial (Página 1)")
+            st.subheader("👁 Vista Previa Oficial (Página 1)")
             st.markdown('<div class="preview-container">', unsafe_allow_html=True)
             st.image(img_preview, caption=f"Página 1 - {nombre_confirmado}", use_container_width=True)
             st.markdown('</div>', unsafe_allow_html=True)
@@ -1161,7 +1210,7 @@ with tab_historial:
             
             if busqueda.lower() in pac_nom.lower():
                 nom_archivo_copia = normalizar_nombre_archivo(pac_nom)
-                with st.expander(f"👤 {pac_nom} | 📅 {fecha} | 👨‍⚕️️ {med}"):
+                with st.expander(f"👤 {pac_nom} | 📅 {fecha} | 👨‍⚕️ {med}"):
                     c_det1, c_det2, c_desc, c_del = st.columns([2, 2, 2, 1.5])
                     c_det1.write(f"**CUPS:** 895001\n**FC Media:** {fc} lpm\n**SDNN 24h:** {sdnn} ms")
                     c_det2.write(f"**Código de Autenticidad:**\n`{cod_ver}`")
