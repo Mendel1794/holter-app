@@ -1,7 +1,7 @@
 streamlit
-pypdf
-pymupdf
-pillow
+PyMuPDF
+Pillow
 qrcode
 pandas
 plotly
+openpyxl
