@@ -1,5 +1,5 @@
 import streamlit as st
-import fitz  # PyMuPDF: motor C++ ultrarrápido
+import fitz  # PyMuPDF: motor C++ de alto rendimiento
 from PIL import Image
 import qrcode
 import re
@@ -495,7 +495,7 @@ with st.sidebar:
     if st.button("Cerrar Sesión", use_container_width=True):
         cerrar_sesion()
         st.rerun()
-    st.caption("CENCARDIO · Estación Cardiológica v9.1")
+    st.caption("CENCARDIO · Estación Cardiológica v9.2")
 
 c_head1, c_head2 = st.columns([1, 6])
 with c_head1:
@@ -540,13 +540,15 @@ def extraer_datos_spacelabs(pdf_bytes, filename=""):
 
     datos = {}
 
-    # 1. Diagnóstico de Remisión y Antecedentes (Comentarios de la prueba)
-    m_dx = re.search(r"DX:\s*([^\n\r\|]+)", texto, re.IGNORECASE)
+    # 1. Diagnóstico de Remisión y Antecedentes
+    m_dx = re.search(r"(?:DX|DIAGN[ÓO]STICO|INDICACI[ÓO]N)\s*[:\.]?\s*([^\n\r\|]+)", texto, re.IGNORECASE)
+    if not m_dx:
+        m_dx = re.search(r"Comentarios de la prueba:\s*\n?\s*([^\n\r\|]+)", texto, re.IGNORECASE)
     datos["dx_motivo"] = m_dx.group(1).strip().upper() if m_dx else ""
 
     # 2. Identificación del Paciente
     nombre_detectado = None
-    m_nom = re.search(r"([A-ZÁÉÍÓÚÑ\s]{3,50},\s*[A-ZÁÉÍÓÚÑ\s]{3,50})[\s\n]+(?:No confirmado|Confirmado)?[\s\n]*Informe Holter", texto)
+    m_nom = re.search(r"([A-ZÁÉÍÓÚÑ\s]{3,50},\s*[A-ZÁÉÍÓÚÑ\s]{3,50})[\s\n]+(?:No confirmado|Confirmado|Reconfirmado)?[\s\n]*Informe Holter", texto)
     if m_nom:
         nombre_detectado = m_nom.group(1).replace("\n", " ").strip()
 
@@ -555,7 +557,7 @@ def extraer_datos_spacelabs(pdf_bytes, filename=""):
         for idx, l in enumerate(lineas):
             if "Informe Holter" in l and idx > 0:
                 candidato = lineas[idx - 1]
-                if candidato in ["No confirmado", "Confirmado"] and idx > 1:
+                if candidato in ["No confirmado", "Confirmado", "Reconfirmado"] and idx > 1:
                     candidato = lineas[idx - 2]
                 if candidato and len(candidato) > 4 and not any(p in candidato for p in ["CENTRO", "COLOMBIA", "Cra.", "30139"]):
                     nombre_detectado = candidato
@@ -603,7 +605,7 @@ def extraer_datos_spacelabs(pdf_bytes, filename=""):
     p_max_m = re.search(r"Pausa.*?M[áa]x\.\s*longitud\s*([\d,\.]+)\s*s", texto)
     datos["pausa_max_seg"] = p_max_m.group(1).replace(",", ".") if p_max_m else "0"
 
-    lat_caido_m = re.search(r"Latido\s+ca[íi]do\s+(\d+)", texto)
+    lat_caido_m = re.search(r"Latidos?\s+ca[íi]dos?\s+(\d+)", texto)
     datos["latidos_caidos"] = int(lat_caido_m.group(1)) if lat_caido_m else 0
 
     # 5. Variables Ventriculares
@@ -627,23 +629,29 @@ def extraer_datos_spacelabs(pdf_bytes, filename=""):
     datos["tsv_episodios"] = limpiar_numero(tsv_m.group(1)) if tsv_m else 0
 
     # 7. Variables de Isquemia / ST
-    st_m = re.search(r"Depresi[óo]n ST\s+(\d+)\s+(-?[\d,\.]+)\s+([^\n]+)", texto)
-    if st_m:
+    st_m = re.search(r"Depresi[óo]n ST\s+(\d+)\s*(-?[\d,\.]*)", texto)
+    if st_m and st_m.group(1) != "0":
         datos["st_episodios"] = int(st_m.group(1))
-        datos["st_desviacion"] = st_m.group(2)
+        datos["st_desviacion"] = st_m.group(2) if st_m.group(2) else "1.0"
     else:
-        st_alt = re.search(r"Depresi[óo]n ST\s+(\d+)", texto)
-        datos["st_episodios"] = int(st_alt.group(1)) if st_alt else 0
+        datos["st_episodios"] = 0
         datos["st_desviacion"] = "0"
 
     # 8. Variables Autonómicas y Repolarización
-    sdnn_m = re.search(r"Valor de 24 horas\s+[\d\.]+\s+([\d\.]+)", texto)
-    datos["sdnn_24h"] = int(sdnn_m.group(1)) if sdnn_m else 85
+    sdnn_m = re.search(r"Valor de 24 horas\s+[\d\.,]+\s+([\d\.,]+)", texto)
+    if sdnn_m:
+        datos["sdnn_24h"] = limpiar_numero(sdnn_m.group(1))
+    else:
+        sdnn_alt = re.search(r"SDNN\s*\(mseg\)\s*[\r\n\s]+.*?Valor de 24 horas\s+[\d\.,]+\s+([\d\.,]+)", texto)
+        datos["sdnn_24h"] = limpiar_numero(sdnn_alt.group(1)) if sdnn_alt else 85
 
-    qtc_m = re.search(r"Todos los per[íi]odos\s+[\d\.]+\s+[\d\.]+\s+([\d\.]+)", texto)
-    datos["qtc_prom"] = int(qtc_m.group(1)) if qtc_m else 400
+    qtc_m = re.search(r"Todos los per[íi]odos\s+[\d\.,]+\s+[\d\.,]+\s+([\d\.,]+)", texto)
+    if qtc_m:
+        datos["qtc_prom"] = limpiar_numero(qtc_m.group(1))
+    else:
+        datos["qtc_prom"] = 400
 
-    # 9. Síntomas registrados en la prueba
+    # 9. Síntomas registrados
     eventos_pac_m = re.search(r"Eventos del paciente\s*:\s*(\d+)", texto)
     datos["eventos_paciente"] = int(eventos_pac_m.group(1)) if eventos_pac_m else 0
 
@@ -746,7 +754,7 @@ def sintetizar_conclusion_y_recomendaciones(d):
         partes.append(f"Ectopia supraventricular frecuente ({d['esv_total']} ESV).")
 
     # 6. Isquemia Miocárdica Dinámica vs Basal
-    es_isquemico = d["st_episodios"] > 0 or any(k in d.get("dx_motivo", "") for k in ["ANGINA", "ISQUEMIA", "CORONAR", "DOLOR"])
+    es_isquemico = d["st_episodios"] > 0 or any(k in d.get("dx_motivo", "") for k in ["ANGINA", "INFARTO", "ISQUEMIA", "CORONAR", "IAM", "SCA", "NECROSIS", "DOLOR"])
     if es_isquemico:
         if d["st_episodios"] > 0:
             partes.append(f"Cambios en la repolarización compatibles con isquemia miocárdica silente ({d['st_episodios']} episodios de infradesnivel del ST, máx. {d['st_desviacion']} mm).")
@@ -756,7 +764,7 @@ def sintetizar_conclusion_y_recomendaciones(d):
         partes.append("Sin alteraciones isquémicas del segmento ST.")
 
     # 7. Riesgo Autonómico
-    if d["sdnn_24h"] < 50:
+    if d["sdnn_24h"] <= 60:
         partes.append("Variabilidad autonómica de la FC severamente disminuida (marcador de alto riesgo cardiovascular).")
     elif d["sdnn_24h"] <= 120:
         partes.append("Variabilidad de la FC moderadamente reducida.")
@@ -793,7 +801,7 @@ def redactar_informe_completo_cencardio(d, perfil):
         p2 = f"2. Intervalos PR normales y QTc normales ({d['qtc_prom']} ms)."
 
     # 3. Alteraciones Isquémicas Dinámicas (Spacelabs + DX)
-    es_isquemico = d["st_episodios"] > 0 or any(k in d.get("dx_motivo", "") for k in ["ANGINA", "ISQUEMIA", "CORONAR", "DOLOR"])
+    es_isquemico = d["st_episodios"] > 0 or any(k in d.get("dx_motivo", "") for k in ["ANGINA", "INFARTO", "ISQUEMIA", "CORONAR", "IAM", "SCA", "NECROSIS", "DOLOR"])
     if es_isquemico:
         if d["st_episodios"] > 0:
             p3 = f"3. Alteraciones isquémicas del segmento ST ({d['st_episodios']} episodios de depresión del ST, máx. {d['st_desviacion']} mm)."
@@ -810,7 +818,7 @@ def redactar_informe_completo_cencardio(d, perfil):
     else:
         p4 = "4. Sin Alteración de la conducción AV."
 
-    # 5. Conducción Intraventricular Dinámica (Detección de Bloqueo por Antecedente y QRS)
+    # 5. Conducción Intraventricular Dinámica (Detección por Antecedente y Trazado)
     tiene_bloqueo = any(k in d.get("dx_motivo", "") for k in ["EPOC", "PULMONAR", "BLOQUEO", "RAMA", "BRD", "BRI", "BCRD", "BCRI", "QRS", "CARDIOPATIA"])
     if tiene_bloqueo:
         p5 = "5. Alteración en la conducción intraventricular por bloqueo completo de rama."
@@ -827,7 +835,7 @@ def redactar_informe_completo_cencardio(d, perfil):
         ectopias_detalles.append(txt_esv)
 
     if d["ev_total"] > 0:
-        txt_ev = f"ventriculares frecuentes ({d['ev_total']} EV"
+        txt_ev = f"ventriculares frecuentes ({d['ev_total']} EV" if d["ev_total"] >= 50 else f"ventriculares aisladas ({d['ev_total']} EV"
         sub_v = []
         if d["tv_episodios"] > 0:
             sub_v.append(f"{d['tv_episodios']} episodios de TV")
@@ -845,31 +853,31 @@ def redactar_informe_completo_cencardio(d, perfil):
     else:
         p6 = "6. Sin alteración de los impulsos ectópicos de relevancia clínica."
 
-    # 7. Síntomas Dinámicos (Diario de eventos del paciente)
+    # 7. Síntomas Dinámicos (Diario de eventos)
     if d["eventos_paciente"] > 0:
         p7 = f"7. El paciente refirió síntomas ({d['eventos_paciente']} eventos marcados en diario)."
     else:
         p7 = "7. No refirió síntomas."
 
-    # 8. Variabilidad Dinámica (Guías Task Force ESC/NASPE)
+    # 8. Variabilidad Dinámica (Task Force ESC/NASPE)
     sdnn = d["sdnn_24h"]
-    if sdnn < 50:
+    if sdnn <= 60:
         p8 = "8. Variabilidad Severamente Disminuida de la FC."
         riesgo = "Riesgo alto"
-    elif 50 <= sdnn <= 120:
+    elif sdnn <= 120:
         p8 = "8. Variabilidad Disminuida de la FC."
         riesgo = "Riesgo medio"
     else:
         p8 = "8. Variabilidad Conservada de la FC."
         riesgo = "Bajo riesgo / Normal"
 
-    # 9. Pausas Dinámicas con duración máxima
+    # 9. Pausas Dinámicas
     if d["pausas"] == 0:
         p9 = "9. No hay pausas significativas."
     else:
         p9 = f"9. Se registraron {d['pausas']} pausas significativas (máx. {d['pausa_max_seg']} s)."
 
-    # 10. Riesgo Autonómico Dinámico
+    # 10. Riesgo Autonómico
     p10 = f"10. Riesgo del paciente SDNN 20 a 24 HRS ({riesgo})."
 
     # Síntesis estructurada
@@ -914,7 +922,7 @@ def inyectar_y_generar_preview(pdf_bytes, texto_informe, datos_paciente, perfil,
     if rects_h and rects_f:
         x0 = rects_h[0].x0 + 2
         y0 = rects_h[0].y1 + 3
-        y1 = y_base - 62  # Deja despejada la zona inferior para firma y QR
+        y1 = y_base - 62  # Deja despejada la zona de firma y QR
         x1 = pagina1.rect.width - 36
         rect_hallazgos = fitz.Rect(x0, y0, x1, y1)
     else:
@@ -1008,8 +1016,8 @@ with tab_procesar:
         alertas_criticas = []
         alertas_moderadas = []
 
-        if datos["sdnn_24h"] < 50:
-            alertas_criticas.append("Variabilidad severamente disminuida (SDNN < 50 ms: Alto riesgo cardiovascular).")
+        if datos["sdnn_24h"] <= 60:
+            alertas_criticas.append("Variabilidad severamente disminuida (SDNN <= 60 ms: Alto riesgo cardiovascular).")
         elif datos["sdnn_24h"] <= 120:
             alertas_moderadas.append(f"Variabilidad de la FC disminuida (SDNN {datos['sdnn_24h']} ms: Riesgo medio).")
 
@@ -1019,7 +1027,7 @@ with tab_procesar:
         if datos["pausas"] > 0:
             alertas_criticas.append(f"Se registraron {datos['pausas']} pausas patológicas significativas (> 2.0 s).")
 
-        es_isquemico = datos["st_episodios"] > 0 or any(k in datos.get("dx_motivo", "") for k in ["ANGINA", "ISQUEMIA", "CORONAR", "DOLOR"])
+        es_isquemico = datos["st_episodios"] > 0 or any(k in datos.get("dx_motivo", "") for k in ["ANGINA", "INFARTO", "ISQUEMIA", "CORONAR", "IAM", "SCA", "NECROSIS", "DOLOR"])
         if es_isquemico:
             alertas_moderadas.append(f"Alteraciones isquémicas del segmento ST ({datos['st_episodios']} episodios / DX: {datos.get('dx_motivo', 'Isquemia')}).")
 
@@ -1029,7 +1037,7 @@ with tab_procesar:
         if alertas_criticas:
             st.markdown(f"""
                 <div class="triage-rojo">
-                    ⚠️ <b>ALERTA CRÍTICA: Hallazgos de Alto Riesgo Cardiovascular Detectados</b><br>
+                    ⚠️️ <b>ALERTA CRÍTICA: Hallazgos de Alto Riesgo Cardiovascular Detectados</b><br>
                     • {'<br>• '.join(alertas_criticas)}
                 </div>
             """, unsafe_allow_html=True)
@@ -1057,6 +1065,7 @@ with tab_procesar:
 
         st.divider()
 
+        # Panel Clínico Decisional en Pantalla
         st.markdown(f"""
             <div class="clinical-panel">
                 <span class="badge-cups">PROCEDIMIENTO CUPS 895001</span><br>
@@ -1152,7 +1161,7 @@ Le deseamos un excelente día."""
                 st.rerun()
 
         with col_preview:
-            st.subheader("👁 Vista Previa Oficial (Página 1)")
+            st.subheader("👁️ Vista Previa Oficial (Página 1)")
             st.markdown('<div class="preview-container">', unsafe_allow_html=True)
             st.image(img_preview, caption=f"Página 1 - {nombre_confirmado}", use_container_width=True)
             st.markdown('</div>', unsafe_allow_html=True)
