@@ -562,7 +562,24 @@ if not st.session_state.autenticado:
 perfil_activo = PERFILES_POR_ID[st.session_state.usuario_actual]
 
 # ==============================================================================
-# GRÁFICA DEL TACOGRAMA (DECLARACIÓN GLOBAL PROTEGIDA)
+# DETECTOR DETERMINÍSTICO DE ESTUDIO (BASE C++)
+# ==============================================================================
+def detectar_tipo_documento_clinico(pdf_bytes):
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    texto = ""
+    for p in doc:
+        texto += p.get_text() + "\n"
+    doc.close()
+
+    if any(k in texto for k in ["Sentinel", "Presión arterial por la mañana", "Informe de MAPA", "AASI"]):
+        return "MAPA"
+    elif any(k in texto for k in ["Informe Holter", "Latidos ventriculares", "Pathfinder SL", "Arritmias ventriculares"]):
+        return "HOLTER"
+    else:
+        return "DESCONOCIDO"
+
+# ==============================================================================
+# GRÁFICA DEL TACOGRAMA
 # ==============================================================================
 def generar_grafica_tacograma(d):
     fc_prom = d.get("fc_prom", 75)
@@ -672,7 +689,7 @@ with st.sidebar:
     if st.button("Cerrar Sesión", use_container_width=True):
         cerrar_sesion()
         st.rerun()
-    st.caption("CENCARDIO · Workstation Enterprise v12.4")
+    st.caption("CENCARDIO · Workstation Enterprise v13.0")
 
 # Header institucional superior
 st.markdown("""
@@ -1022,23 +1039,24 @@ Hallazgos:
 # MOTOR 3: PRUEBA DE ESFUERZO / ERGOMETRÍA (CUPS 893805)
 # ==============================================================================
 def calcular_mets_bruce(tiempo_min):
-    # Interpolación continua de Bruce validada según AHA
+    if tiempo_min <= 0.1:
+        return 0.0
     if tiempo_min <= 3.0:
-        return round(1.0 + (tiempo_min / 3.0) * 3.8, 1)      # Etapa 1: ~4.8 METs
+        return round(1.0 + (tiempo_min / 3.0) * 3.8, 1)
     elif tiempo_min <= 6.0:
-        return round(4.8 + ((tiempo_min - 3.0) / 3.0) * 2.2, 1) # Etapa 2: ~7.0 METs
+        return round(4.8 + ((tiempo_min - 3.0) / 3.0) * 2.2, 1)
     elif tiempo_min <= 9.0:
-        return round(7.0 + ((tiempo_min - 6.0) / 3.0) * 3.1, 1) # Etapa 3: ~10.1 METs
+        return round(7.0 + ((tiempo_min - 6.0) / 3.0) * 3.1, 1)
     elif tiempo_min <= 12.0:
-        return round(10.1 + ((tiempo_min - 9.0) / 3.0) * 3.4, 1) # Etapa 4: ~13.5 METs
+        return round(10.1 + ((tiempo_min - 9.0) / 3.0) * 3.4, 1)
     elif tiempo_min <= 15.0:
-        return round(13.5 + ((tiempo_min - 12.0) / 3.0) * 3.7, 1) # Etapa 5: ~17.2 METs
+        return round(13.5 + ((tiempo_min - 12.0) / 3.0) * 3.7, 1)
     else:
-        return round(17.2 + ((tiempo_min - 15.0) / 3.0) * 3.0, 1) # Etapa 6+: > 18 METs
+        return round(17.2 + ((tiempo_min - 15.0) / 3.0) * 3.0, 1)
 
 def redactar_informe_ergometria_institucional(d, perfil):
-    fcm_prev = 220 - d["edad"]
-    porc = round((d["fc_pico"] / fcm_prev) * 100) if fcm_prev > 0 else 100
+    fcm_prev = 220 - d["edad"] if d["edad"] > 0 else 200
+    porc = round((d["fc_pico"] / fcm_prev) * 100) if (fcm_prev > 0 and d["fc_pico"] > 0) else 0
     suf = "suficiente" if porc >= 85 else "insuficiente"
     dp = d["fc_pico"] * d["pas_pico"]
     
@@ -1052,16 +1070,16 @@ def redactar_informe_ergometria_institucional(d, perfil):
 
     p1 = f"1. Ritmo sinusal normal basal y durante todas las etapas del esfuerzo."
     p2 = f"2. Protocolo de {d['protocolo']} completado con duración de {d['tiempo_min']:.2f} minutos ({d['etapa']})."
-    p3 = f"3. Capacidad funcional alcanzada: {d['mets']} METs (excelente tolerancia al esfuerzo físico)."
+    p3 = f"3. Capacidad funcional alcanzada: {d['mets']} METs."
     p4 = f"4. Respuesta cronotrópica: FC basal {d['fc_basal']} lpm elevándose hasta FC pico {d['fc_pico']} lpm ({porc}% de la FCM prevista, prueba {suf})."
-    p5 = f"5. Respuesta hemodinámica presora normotensiva al esfuerzo: PA basal {d['pas_basal']}/{d['pad_basal']} mmHg alcanzando PA pico {d['pas_pico']}/{d['pad_pico']} mmHg."
-    p6 = f"6. Doble producto máximo alcanzado: {dp:,} mmHg*lpm (adecuado consumo de oxígeno miocárdico)."
+    p5 = f"5. Respuesta hemodinámica presora: PA basal {d['pas_basal']}/{d['pad_basal']} mmHg alcanzando PA pico {d['pas_pico']}/{d['pad_pico']} mmHg."
+    p6 = f"6. Doble producto máximo alcanzado: {dp:,} mmHg*lpm."
     p7 = f"7. Comportamiento electrocardiográfico del ST: {st_res}."
     p8 = "8. Sin arritmias ventriculares complejas ni eventos supraventriculares sostenidos inducidos por el ejercicio."
     p9 = "9. Motivo de suspensión: Consecución de frecuencia cardíaca máxima y agotamiento físico voluntario, sin dolor precordial."
     p10 = f"10. Estratificación pronóstica por Duke Treadmill Score: {dts:.1f} ({duke})."
 
-    concl = f"Prueba de esfuerzo {suf}, eléctricamente {diag_el} para isquemia miocárdica inducible. Buena capacidad física y recuperación hemodinámica normal."
+    concl = f"Prueba de esfuerzo {suf}, eléctricamente {diag_el} para isquemia miocárdica inducible. Buena tolerancia hemodinámica y funcional."
     recs = "Continuar manejo médico integral y prescripción de actividad física aeróbica regular." if d["st_mm"] < 1.0 else "Valoración prioritaria por cardiología clínica para estudio funcional o angiografía."
 
     return f"""INTERPRETACIÓN PRUEBA DE ESFUERZO COMPUTARIZADA - CUPS 893805
@@ -1087,9 +1105,8 @@ RECOMENDACIONES: {recs}
 
 def generar_pdf_ergometria_completo(d, texto_informe, perfil, cod_uuid, imagenes_adjuntas=[]):
     doc = fitz.open()
-    page = doc.new_page(width=612, height=792)  # Tamaño Carta (Letter)
+    page = doc.new_page(width=612, height=792)
 
-    # Membrete institucional CENCARDIO
     logo_bytes = None
     for nom in ["cencardio.jpg", "cencardio.png", "cencardio.jpeg", "logo.png", "logo.jpg"]:
         if os.path.exists(nom):
@@ -1105,15 +1122,13 @@ def generar_pdf_ergometria_completo(d, texto_informe, perfil, cod_uuid, imagenes
 
     page.draw_rect(fitz.Rect(36, 85, 576, 87), color=None, fill=(0.04, 0.15, 0.25), overlay=True)
 
-    # Tarjeta Demográfica
     page.draw_rect(fitz.Rect(36, 95, 576, 155), color=(0.85, 0.9, 0.95), fill=(0.97, 0.98, 1.0), width=1)
     page.insert_text(fitz.Point(46, 112), f"PACIENTE: {d['paciente'].upper()}", fontsize=8.5, fontname="helv", color=(0.04, 0.15, 0.25))
     page.insert_text(fitz.Point(46, 126), f"DOCUMENTO: {d['cedula']}    |    EDAD: {d['edad']} AÑOS    |    SEXO: {d['sexo']}", fontsize=7.5, fontname="helv", color=(0.2, 0.25, 0.3))
     page.insert_text(fitz.Point(46, 140), f"FECHA DEL ESTUDIO: {datetime.now().strftime('%d/%m/%Y')}    |    MÉDICO LECTOR: {perfil['nombre_completo']}", fontsize=7.5, fontname="helv", color=(0.2, 0.25, 0.3))
 
-    # Cajas de Parámetros Hemodinámicos
-    fcm_prev = 220 - d["edad"]
-    porc = round((d["fc_pico"] / fcm_prev) * 100) if fcm_prev > 0 else 100
+    fcm_prev = 220 - d["edad"] if d["edad"] > 0 else 200
+    porc = round((d["fc_pico"] / fcm_prev) * 100) if (fcm_prev > 0 and d["fc_pico"] > 0) else 0
     cajas = [
         ("FC PICO ALCANZADA", f"{d['fc_pico']} lpm ({porc}%)"),
         ("PA ESFUERZO PICO", f"{d['pas_pico']}/{d['pad_pico']} mmHg"),
@@ -1144,7 +1159,6 @@ def generar_pdf_ergometria_completo(d, texto_informe, perfil, cod_uuid, imagenes
     if firma_bytes and perfil["id"] in ["dr.amaya", "admin"]:
         page.insert_image(fitz.Rect(390, 690, 545, 755), stream=firma_bytes)
 
-    # Inserción de las fotos escaneadas como anexos oficiales de alta calidad
     for img_file in imagenes_adjuntas:
         p_extra = doc.new_page(width=612, height=792)
         img_bytes = img_file.getvalue() if hasattr(img_file, "getvalue") else img_file
@@ -1156,36 +1170,27 @@ def generar_pdf_ergometria_completo(d, texto_informe, perfil, cod_uuid, imagenes
     doc.close()
     return pdf_bytes, img_preview
 
-# ==========================================
-# INYECCIÓN UNIVERSAL EN PDF (HOLTER Y MAPA)
-# ==========================================
-def inyectar_pdf_universal(pdf_bytes, texto_informe, paciente_nom, perfil, cod_uuid, proc_cups, estampador_activo=False):
+# ==============================================================================
+# INYECCIÓN EXCLUSIVA HOLTER ECG (PARTE INFERIOR Y = 540 A 740)
+# ==============================================================================
+def inyectar_holter_pdf(pdf_bytes, texto_informe, paciente_nom, perfil, cod_uuid, estampador_activo=False):
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     pagina1 = doc[0]
 
     rects_h = pagina1.search_for("Hallazgos:")
-    if not rects_h: rects_h = pagina1.search_for("INTERPRETACIÓN TEST MAPA")
-    if not rects_h: rects_h = pagina1.search_for("Conclusiones:")
-
     rects_f = pagina1.search_for("Firma del médico")
     if not rects_f: rects_f = pagina1.search_for("Firma del operador")
-    if not rects_f: rects_f = pagina1.search_for("Resumen de todo el registro")
 
-    y_base = rects_f[0].y0 if rects_f else 540
+    y_base = rects_f[0].y0 if rects_f else 740
+    y0 = (rects_h[0].y1 + 4) if rects_h else 545
+    y1 = y_base - 62
 
-    if rects_h and rects_f:
-        x0 = rects_h[0].x0 + 2
-        y0 = rects_h[0].y1 + 3
-        y1 = y_base - 10
-        x1 = pagina1.rect.width - 36
-        rect_caja = fitz.Rect(x0, y0, x1, y1)
-    else:
-        rect_caja = fitz.Rect(35, 235, 570, 395)
-
+    # 1. Blanquear área exclusiva de texto (sin tocar las tablas superiores)
+    rect_caja = fitz.Rect(35, y0, pagina1.rect.width - 36, y1)
     pagina1.draw_rect(rect_caja, color=None, fill=(1, 1, 1), overlay=True)
 
-    font_size_optimo = 6.4
-    for fs in [6.8, 6.4, 6.0, 5.6, 5.2, 4.8]:
+    font_size_optimo = 5.6
+    for fs in [6.2, 5.9, 5.6, 5.3, 5.0, 4.7, 4.4, 4.2]:
         doc_test = fitz.open(stream=pdf_bytes, filetype="pdf")
         p_test = doc_test[0]
         rc = p_test.insert_textbox(rect_caja, texto_informe, fontsize=fs, fontname="helv", align=fitz.TEXT_ALIGN_LEFT)
@@ -1196,182 +1201,237 @@ def inyectar_pdf_universal(pdf_bytes, texto_informe, paciente_nom, perfil, cod_u
 
     pagina1.insert_textbox(rect_caja, texto_informe, fontsize=font_size_optimo, fontname="helv", color=(0, 0, 0), align=fitz.TEXT_ALIGN_LEFT)
 
+    # 2. Blanquear zona inferior para QR y Firma
+    rect_inferior = fitz.Rect(220, y_base - 58, pagina1.rect.width - 36, y_base + 12)
+    pagina1.draw_rect(rect_inferior, color=None, fill=(1, 1, 1), overlay=True)
+
     fecha_emision = datetime.now().strftime("%Y-%m-%d")
-    qr_bytes = generar_qr_verificacion(paciente_nom, perfil['nombre_completo'], fecha_emision, cod_uuid, proc_cups)
-    rect_qr = fitz.Rect(495, 240, 545, 290)
+    qr_bytes = generar_qr_verificacion(paciente_nom, perfil['nombre_completo'], fecha_emision, cod_uuid, "CUPS 895001")
+    rect_qr = fitz.Rect(230, y_base - 32, 270, y_base + 8)
     pagina1.insert_image(rect_qr, stream=qr_bytes)
+
+    pagina1.insert_text(fitz.Point(275, y_base - 18), "Validado Digitalmente", fontsize=5.2, fontname="helv", color=(0.08, 0.2, 0.36))
+    pagina1.insert_text(fitz.Point(275, y_base - 9), "Res. 3100 de 2019 - MinSalud", fontsize=4.7, fontname="helv", color=(0.25, 0.25, 0.25))
+    pagina1.insert_text(fitz.Point(275, y_base), f"Cód: {cod_uuid[:12]}...", fontsize=4.5, fontname="helv", color=(0.4, 0.4, 0.4))
 
     firma_bytes = procesar_firma_transparente()
     if firma_bytes and estampador_activo:
-        rect_f = fitz.Rect(380, 330, 530, 390)
+        fx0 = (rects_f[0].x0 + 10) if rects_f else 380
+        fy0 = y_base - 58
+        rect_f = fitz.Rect(fx0, fy0, fx0 + 155, y_base + 4)
         pagina1.insert_image(rect_f, stream=firma_bytes)
 
     pix = pagina1.get_pixmap(dpi=130)
     img_preview = pix.tobytes("png")
     pdf_final = doc.tobytes()
     doc.close()
+    return pdf_final, img_preview
 
+# ==============================================================================
+# INYECCIÓN EXCLUSIVA MAPA SENTINEL (FRANJA MEDIA Y = 235 A 420)
+# ==============================================================================
+def inyectar_mapa_pdf(pdf_bytes, texto_informe, paciente_nom, perfil, cod_uuid, estampador_activo=False):
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    pagina1 = doc[0]
+
+    rect_m = pagina1.search_for("Presión arterial por la mañana")
+    rect_r = pagina1.search_for("Resumen de todo el registro")
+
+    y0 = (rect_m[0].y1 + 4) if rect_m else 235
+    y1 = (rect_r[0].y0 - 6) if rect_r else 420
+
+    rect_franja = fitz.Rect(35, y0, pagina1.rect.width - 35, y1)
+    pagina1.draw_rect(rect_franja, color=None, fill=(1, 1, 1), overlay=True)
+
+    rect_texto = fitz.Rect(36, y0 + 2, 440, y1 - 2)
+
+    font_size = 6.4
+    for fs in [7.2, 6.8, 6.4, 6.0, 5.6]:
+        doc_test = fitz.open(stream=pdf_bytes, filetype="pdf")
+        p_test = doc_test[0]
+        rc = p_test.insert_textbox(rect_texto, texto_informe, fontsize=fs, fontname="helv", align=fitz.TEXT_ALIGN_LEFT)
+        doc_test.close()
+        if rc >= 0:
+            font_size = fs
+            break
+
+    pagina1.insert_textbox(rect_texto, texto_informe, fontsize=font_size, fontname="helv", color=(0, 0, 0), align=fitz.TEXT_ALIGN_LEFT)
+
+    fecha_emision = datetime.now().strftime("%Y-%m-%d")
+    qr_bytes = generar_qr_verificacion(paciente_nom, perfil['nombre_completo'], fecha_emision, cod_uuid, "CUPS 895003")
+    rect_qr = fitz.Rect(455, y0 + 6, 505, y0 + 56)
+    pagina1.insert_image(rect_qr, stream=qr_bytes)
+    pagina1.insert_text(fitz.Point(510, y0 + 22), "Validado Digitalmente", fontsize=5.0, fontname="helv", color=(0.04, 0.15, 0.25))
+    pagina1.insert_text(fitz.Point(510, y0 + 32), "Res. 3100 MinSalud", fontsize=4.6, fontname="helv", color=(0.3, 0.3, 0.3))
+    pagina1.insert_text(fitz.Point(510, y0 + 42), f"Cód: {cod_uuid[:10]}...", fontsize=4.4, fontname="helv", color=(0.4, 0.4, 0.4))
+
+    firma_bytes = procesar_firma_transparente()
+    if firma_bytes and estampador_activo:
+        rect_f = fitz.Rect(445, y0 + 62, 575, y1 - 4)
+        pagina1.insert_image(rect_f, stream=firma_bytes)
+
+    pix = pagina1.get_pixmap(dpi=130)
+    img_preview = pix.tobytes("png")
+    pdf_final = doc.tobytes()
+    doc.close()
     return pdf_final, img_preview
 
 # ==========================================
 # GESTIÓN DEL ENTORNO DE PROCESAMIENTO
 # ==========================================
 with tab_procesar:
-    if "Holter" in modalidad_seleccionada:
-        cups_actual = "CUPS 895001"
-        mod_nombre = "Holter ECG 24 Horas"
-    elif "MAPA" in modalidad_seleccionada:
-        cups_actual = "CUPS 895003"
-        mod_nombre = "MAPA Tensional 24 Horas"
-    else:
-        cups_actual = "CUPS 893805"
-        mod_nombre = "Prueba de Esfuerzo Computarizada"
-
-    # ==========================================================
-    # CASO ESPECIAL: PRUEBA DE ESFUERZO (DIGITALIZACIÓN ASISTIDA)
-    # ==========================================================
     if "Esfuerzo" in modalidad_seleccionada:
         st.markdown("#### 🏃 Consola de Digitalización y Emisión de Prueba de Esfuerzo (CUPS 893805)")
-        st.caption("Adjunte las fotografías/escaneos de la prueba impresa tomadas por enfermería y confirme los parámetros clínicos:")
+        st.caption("Ingrese los datos reales del paciente y de la prueba impresa para procesar el certificado institucional:")
 
         col_f1, col_f2 = st.columns([1.2, 1], gap="large")
 
         with col_f1:
-            st.markdown("<b>1. Parámetros Clínicos Extraídos del Trazado Impreso</b>", unsafe_allow_html=True)
+            st.markdown("<b>1. Parámetros Clínicos de la Prueba Impresa</b>", unsafe_allow_html=True)
             c_in1, c_in2, c_in3 = st.columns(3)
             with c_in1:
-                p_nombre = st.text_input("Paciente:", value="KAROL JULIANA SUAREZ FARFAN")
-                p_cedula = st.text_input("Cédula / Documento:", value="1050095219")
+                p_nombre = st.text_input("Nombre del Paciente:", value="", placeholder="Ej: CARLOS MENDOZA")
+                p_cedula = st.text_input("Cédula / Documento:", value="", placeholder="Ej: 10203040")
             with c_in2:
-                p_edad = st.number_input("Edad:", value=17, min_value=1, max_value=110)
+                p_edad = st.number_input("Edad:", value=35, min_value=1, max_value=110)
                 p_sexo = st.selectbox("Sexo:", ["Femenino", "Masculino"], index=0)
             with c_in3:
                 p_protocolo = st.selectbox("Protocolo:", ["Bruce", "Bruce Modificado", "Naughton"], index=0)
-                p_etapa = st.text_input("Etapa alcanzada:", value="Etapa 4")
+                p_etapa = st.text_input("Etapa alcanzada:", value="", placeholder="Ej: Etapa 4")
 
             c_in4, c_in5, c_in6 = st.columns(3)
             with c_in4:
-                p_tiempo = st.number_input("Tiempo total (minutos):", value=16.23, step=0.1)
+                p_tiempo = st.number_input("Tiempo total (minutos):", value=0.0, step=0.1)
                 mets_calc = calcular_mets_bruce(p_tiempo)
                 p_mets = st.number_input("Capacidad Funcional (METs):", value=float(mets_calc), step=0.5)
             with c_in5:
-                p_fc_basal = st.number_input("FC Basal (lpm):", value=91)
-                p_fc_pico = st.number_input("FC Pico alcanzada (lpm):", value=194)
+                p_fc_basal = st.number_input("FC Basal (lpm):", value=75)
+                p_fc_pico = st.number_input("FC Pico alcanzada (lpm):", value=150)
             with c_in6:
-                p_pa_basal = st.text_input("PA Basal (mmHg):", value="119/70")
-                p_pa_pico = st.text_input("PA Esfuerzo Pico (mmHg):", value="140/87")
+                p_pa_basal = st.text_input("PA Basal (mmHg):", value="", placeholder="Ej: 120/80")
+                p_pa_pico = st.text_input("PA Esfuerzo Pico (mmHg):", value="", placeholder="Ej: 160/90")
 
             c_in7, c_in8 = st.columns(2)
             with c_in7:
                 p_st_mm = st.number_input("Desviación del ST (mm):", value=0.0, step=0.5)
             with c_in8:
-                tel_encontrado = buscar_telefono_dinamica(p_cedula)
+                tel_encontrado = buscar_telefono_dinamica(p_cedula) if p_cedula else ""
                 p_celular = st.text_input("Celular (Envío WhatsApp):", value=tel_encontrado)
 
             st.write("")
-            st.markdown("<b>📸 Adjuntar fotos o escaneos del trazado de la banda:</b>", unsafe_allow_html=True)
+            st.markdown("<b>📸 Adjuntar fotos o escaneos de las tirillas:</b>", unsafe_allow_html=True)
             fotos_esfuerzo = st.file_uploader(
-                "Suba las imágenes de la prueba para archivarlas e incrustarlas en el certificado final:",
+                "Suba las imágenes del trazado impreso para adjuntarlas al PDF final:",
                 type=["jpg", "jpeg", "png"],
                 accept_multiple_files=True
             )
 
         with col_f2:
-            st.markdown("<b>2. Diagnóstico Institucional y Dictamen</b>", unsafe_allow_html=True)
+            st.markdown("<b>2. Diagnóstico Institucional y Generación</b>", unsafe_allow_html=True)
 
-            pas_b, pad_b = [int(x) for x in p_pa_basal.split("/")] if "/" in p_pa_basal else (120, 80)
-            pas_p, pad_p = [int(x) for x in p_pa_pico.split("/")] if "/" in p_pa_pico else (140, 85)
+            if p_nombre.strip():
+                pas_b, pad_b = [int(x) for x in p_pa_basal.split("/")] if "/" in p_pa_basal else (120, 80)
+                pas_p, pad_p = [int(x) for x in p_pa_pico.split("/")] if "/" in p_pa_pico else (150, 90)
 
-            datos_erg = {
-                "paciente": p_nombre,
-                "cedula": p_cedula,
-                "edad": p_edad,
-                "sexo": p_sexo,
-                "protocolo": p_protocolo,
-                "etapa": p_etapa,
-                "tiempo_min": p_tiempo,
-                "mets": p_mets,
-                "fc_basal": p_fc_basal,
-                "fc_pico": p_fc_pico,
-                "pas_basal": pas_b,
-                "pad_basal": pad_b,
-                "pas_pico": pas_p,
-                "pad_pico": pad_p,
-                "st_mm": p_st_mm
-            }
+                datos_erg = {
+                    "paciente": p_nombre,
+                    "cedula": p_cedula,
+                    "edad": p_edad,
+                    "sexo": p_sexo,
+                    "protocolo": p_protocolo,
+                    "etapa": p_etapa if p_etapa else "Final",
+                    "tiempo_min": p_tiempo,
+                    "mets": p_mets,
+                    "fc_basal": p_fc_basal,
+                    "fc_pico": p_fc_pico,
+                    "pas_basal": pas_b,
+                    "pad_basal": pad_b,
+                    "pas_pico": pas_p,
+                    "pad_pico": pad_p,
+                    "st_mm": p_st_mm
+                }
 
-            texto_erg_defecto = redactar_informe_ergometria_institucional(datos_erg, perfil_activo)
-            texto_erg_final = st.text_area("Informe Oficial para Certificado:", value=texto_erg_defecto, height=310)
+                texto_erg_defecto = redactar_informe_ergometria_institucional(datos_erg, perfil_activo)
+                texto_erg_final = st.text_area("Informe Oficial para Certificado:", value=texto_erg_defecto, height=310)
 
-            estudio_uuid_erg = str(uuid.uuid4()).upper()
-            pdf_erg, img_erg_prev = generar_pdf_ergometria_completo(
-                datos_erg,
-                texto_erg_final,
-                perfil_activo,
-                estudio_uuid_erg,
-                imagenes_adjuntas=fotos_esfuerzo if fotos_esfuerzo else []
-            )
-
-            col_be1, col_be2 = st.columns(2)
-            with col_be1:
-                st.download_button(
-                    label="📄 DESCARGAR EXPEDIENTE COMPLETO",
-                    data=pdf_erg,
-                    file_name=f"{normalizar_nombre_archivo(p_nombre)}_Prueba_Esfuerzo.pdf",
-                    mime="application/pdf",
-                    type="primary",
-                    use_container_width=True
+                estudio_uuid_erg = str(uuid.uuid4()).upper()
+                pdf_erg, img_erg_prev = generar_pdf_ergometria_completo(
+                    datos_erg,
+                    texto_erg_final,
+                    perfil_activo,
+                    estudio_uuid_erg,
+                    imagenes_adjuntas=fotos_esfuerzo if fotos_esfuerzo else []
                 )
-            with col_be2:
-                if st.button("💾 Guardar en Archivo Clínico", use_container_width=True):
-                    guardar_estudio_db(
-                        p_nombre,
-                        "Prueba de Esfuerzo",
-                        "CUPS 893805",
-                        f"FC Pico: {p_fc_pico} | {p_mets} METs",
-                        perfil_activo['nombre_completo'],
-                        texto_erg_final,
-                        pdf_erg,
-                        estudio_uuid_erg
+
+                col_be1, col_be2 = st.columns(2)
+                with col_be1:
+                    st.download_button(
+                        label="📄 DESCARGAR CERTIFICADO COMPLETO",
+                        data=pdf_erg,
+                        file_name=f"{normalizar_nombre_archivo(p_nombre)}_Prueba_Esfuerzo.pdf",
+                        mime="application/pdf",
+                        type="primary",
+                        use_container_width=True
                     )
-                    st.success(f"✅ Guardado en archivo clínico: {p_nombre}")
+                with col_be2:
+                    if st.button("💾 Guardar en Archivo Clínico", use_container_width=True):
+                        guardar_estudio_db(
+                            p_nombre,
+                            "Prueba de Esfuerzo",
+                            "CUPS 893805",
+                            f"FC Pico: {p_fc_pico} | {p_mets} METs",
+                            perfil_activo['nombre_completo'],
+                            texto_erg_final,
+                            pdf_erg,
+                            estudio_uuid_erg
+                        )
+                        st.success(f"✅ Guardado en archivo clínico: {p_nombre}")
 
-            if p_celular:
-                tel_l = re.sub(r'\D', '', p_celular)
-                if not tel_l.startswith("57") and len(tel_l) == 10:
-                    tel_l = "57" + tel_l
-                
-                url_c = f"https://holtercencardio.streamlit.app/?val={estudio_uuid_erg[:12]}&pac={urllib.parse.quote(p_nombre)}&med={urllib.parse.quote(perfil_activo['nombre_completo'])}&proc=CUPS_893805"
-                msg_w = f"Estimado(a) paciente {p_nombre}, CENCARDIO le hace entrega de su resultado oficial de Prueba de Esfuerzo (CUPS 893805). Puede verificar su autenticidad aquí: {url_c}"
-                wa_u = f"https://wa.me/{tel_l}?text={urllib.parse.quote(msg_w)}"
-                st.write("")
-                st.link_button("📲 ENVIAR RESULTADO POR WHATSAPP", wa_u, use_container_width=True)
+                if p_celular:
+                    tel_l = re.sub(r'\D', '', p_celular)
+                    if not tel_l.startswith("57") and len(tel_l) == 10:
+                        tel_l = "57" + tel_l
+                    
+                    url_c = f"https://holtercencardio.streamlit.app/?val={estudio_uuid_erg[:12]}&pac={urllib.parse.quote(p_nombre)}&med={urllib.parse.quote(perfil_activo['nombre_completo'])}&proc=CUPS_893805"
+                    msg_w = f"Estimado(a) paciente {p_nombre}, CENCARDIO le hace entrega de su resultado oficial de Prueba de Esfuerzo (CUPS 893805). Verifique su autenticidad aquí: {url_c}"
+                    wa_u = f"https://wa.me/{tel_l}?text={urllib.parse.quote(msg_w)}"
+                    st.write("")
+                    st.link_button("📲 ENVIAR RESULTADO POR WHATSAPP", wa_u, use_container_width=True)
 
-        st.divider()
-        st.subheader("👁️ Vista Previa del Certificado Institucional (Página 1)")
-        st.image(img_erg_prev, caption=f"Página 1 - {p_nombre}", width=680)
+                st.divider()
+                st.subheader("👁️ Vista Previa del Certificado Institucional (Página 1)")
+                st.image(img_erg_prev, caption=f"Página 1 - {p_nombre}", width=680)
+            else:
+                st.info("💡 Digite el nombre del paciente a la izquierda para generar el estudio.")
 
-    # ==========================================================
-    # FLUJO DIGITAL CON ARCHIVO PDF (HOLTER Y MAPA)
-    # ==========================================================
+    # FLUJO DIGITAL CON ARCHIVO PDF (HOLTER O MAPA CON AUTO-DETECCIÓN)
     else:
-        st.markdown(f"#### 📥 Cargar Estudio para {mod_nombre} ({cups_actual})")
-        uploaded_file = st.file_uploader(f"Seleccione el informe de {mod_nombre} en formato PDF:", type=["pdf"])
+        st.markdown("#### 📥 Cargar Estudio Digital (PDF de Holter o MAPA)")
+        uploaded_file = st.file_uploader("Seleccione el archivo PDF del estudio:", type=["pdf"])
 
         if uploaded_file is not None:
             bytes_originales = uploaded_file.getvalue()
 
             if "archivo_cargado_nombre" not in st.session_state or st.session_state.archivo_cargado_nombre != uploaded_file.name:
-                with st.spinner(f"Analizando estudio de {mod_nombre} con motor de evidencia clínica..."):
-                    if "Holter" in modalidad_seleccionada:
+                with st.spinner("Analizando y detectando tipo de estudio automáticamente..."):
+                    tipo_real = detectar_tipo_documento_clinico(bytes_originales)
+
+                    if tipo_real == "HOLTER":
                         d_act = extraer_datos_holter(bytes_originales, uploaded_file.name)
                         txt_inf = redactar_informe_holter_11_puntos(d_act, perfil_activo)
+                        cups_detectado = "CUPS 895001"
+                        mod_detectada = "Holter ECG 24 Horas"
                         param_clave = f"FC {d_act['fc_prom']} | SDNN {d_act['sdnn_24h']}ms"
-                    else:
+                    else:  # MAPA
                         d_act = extraer_datos_mapa_sentinel(bytes_originales, uploaded_file.name)
                         txt_inf = redactar_informe_mapa_cencardio(d_act, perfil_activo)
+                        cups_detectado = "CUPS 895003"
+                        mod_detectada = "MAPA Tensional 24 Horas"
                         param_clave = f"PA 24h: {d_act['pas_24h']}/{d_act['pad_24h']} mmHg"
 
+                    st.session_state.tipo_detectado = tipo_real
+                    st.session_state.cups_actual = cups_detectado
+                    st.session_state.mod_nombre = mod_detectada
                     st.session_state.datos_actuales = d_act
                     st.session_state.texto_informe = txt_inf
                     st.session_state.param_clave = param_clave
@@ -1382,11 +1442,14 @@ with tab_procesar:
                     st.session_state.telefono_paciente = buscar_telefono_dinamica(cedula_pac)
 
             datos = st.session_state.datos_actuales
+            tipo_estudio = st.session_state.tipo_detectado
+            cups_actual = st.session_state.cups_actual
+            mod_nombre = st.session_state.mod_nombre
 
             alertas_criticas = []
             alertas_moderadas = []
 
-            if "Holter" in modalidad_seleccionada:
+            if tipo_estudio == "HOLTER":
                 if datos["sdnn_24h"] <= 60:
                     alertas_criticas.append(f"Variabilidad severamente disminuida (SDNN {datos['sdnn_24h']} ms: Alto riesgo cardiovascular).")
                 elif datos["sdnn_24h"] <= 120:
@@ -1420,7 +1483,7 @@ with tab_procesar:
                     alertas_moderadas.append(f"Carga tensional en rango limítrofe (Sistólica {datos['carga_pas']}%, Diastólica {datos['carga_pad']}%).")
 
                 if datos["pp_val"] > 60:
-                    alertas_moderadas.append(f"Presión de pulso ensanchada ({datos['pp_val']} mmHg: marcador de rigidez arterial).")
+                    alertas_moderadas.append(f"Presión de pulso ensanchada ({datos['pp_val']} mmHg: rigidez arterial).")
 
             if alertas_criticas:
                 st.markdown(f"""
@@ -1443,7 +1506,7 @@ with tab_procesar:
                     </div>
                 """, unsafe_allow_html=True)
 
-            if "Holter" in modalidad_seleccionada:
+            if tipo_estudio == "HOLTER":
                 c1, c2, c3, c4 = st.columns(4)
                 c1.metric("FC Promedio (24h)", f"{datos['fc_prom']} lpm", f"Día {datos['fc_dia']} | Noche {datos['fc_noc']}")
                 c2.metric("Ectopias Ventriculares", f"{datos['ev_total']} EV", f"TV: {datos['tv_episodios']}")
@@ -1479,15 +1542,26 @@ with tab_procesar:
                 informe_para_grabar = st.text_area("Texto oficial para inyectar en el reporte final:", value=st.session_state.texto_informe, height=360)
 
                 debe_estampar = perfil_activo["id"] in ["dr.amaya", "admin"]
-                pdf_final, img_preview = inyectar_pdf_universal(
-                    bytes_originales,
-                    informe_para_grabar,
-                    nombre_confirmado,
-                    perfil_activo,
-                    st.session_state.estudio_uuid,
-                    cups_actual,
-                    estampador_activo=debe_estampar
-                )
+
+                # LLAMADA INDEPENDIENTE SEGÚN TIPO DETECTADO
+                if tipo_estudio == "HOLTER":
+                    pdf_final, img_preview = inyectar_holter_pdf(
+                        bytes_originales,
+                        informe_para_grabar,
+                        nombre_confirmado,
+                        perfil_activo,
+                        st.session_state.estudio_uuid,
+                        estampador_activo=debe_estampar
+                    )
+                else:
+                    pdf_final, img_preview = inyectar_mapa_pdf(
+                        bytes_originales,
+                        informe_para_grabar,
+                        nombre_confirmado,
+                        perfil_activo,
+                        st.session_state.estudio_uuid,
+                        estampador_activo=debe_estampar
+                    )
 
                 col_btn1, col_btn2 = st.columns([1, 1])
                 with col_btn1:
@@ -1531,7 +1605,7 @@ with tab_procesar:
 
                 st.write("")
                 if st.button("🔄 Cargar Nuevo Estudio", use_container_width=True):
-                    for k in ["datos_actuales", "archivo_cargado_nombre", "texto_informe", "telefono_paciente", "param_clave"]:
+                    for k in ["datos_actuales", "archivo_cargado_nombre", "texto_informe", "telefono_paciente", "param_clave", "tipo_detectado", "cups_actual", "mod_nombre"]:
                         if k in st.session_state:
                             del st.session_state[k]
                     st.rerun()
