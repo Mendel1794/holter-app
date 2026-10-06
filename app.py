@@ -441,6 +441,66 @@ if not st.session_state.autenticado:
 
 perfil_activo = PERFILES_POR_ID[st.session_state.usuario_actual]
 
+# ==============================================================================
+# GRÁFICA DEL TACOGRAMA (DEFINIDA DE FORMA GLOBAL Y PROTEGIDA CONTRA NULOS)
+# ==============================================================================
+def generar_grafica_tacograma(d):
+    fc_prom = d.get("fc_prom", 75)
+    fc_dia = d.get("fc_dia", int(fc_prom * 1.05))
+    fc_noc = d.get("fc_noc", int(fc_prom * 0.90))
+    fc_max = d.get("fc_max", 100)
+    fc_min = d.get("fc_min", 55)
+
+    horas = [f"{h:02d}:00" for h in range(24)]
+    fc_curva = []
+    for h in range(24):
+        if 6 <= h <= 21:
+            val = fc_dia + (fc_max - fc_dia) * 0.25 * ((h % 4) / 4)
+        else:
+            val = fc_noc - (fc_noc - fc_min) * 0.3 * ((h % 3) / 3)
+        val = max(fc_min, min(fc_max, val))
+        fc_curva.append(round(val))
+
+    fig = go.Figure()
+    fig.add_hrect(
+        y0=60, y1=100, 
+        fillcolor="rgba(19, 50, 91, 0.05)", 
+        line_width=0,
+        annotation_text="Rango Normal (60-100)", 
+        annotation_position="top left",
+        annotation_font_size=9,
+        annotation_font_color="#64748b"
+    )
+
+    fig.add_trace(go.Scatter(
+        x=horas, y=fc_curva,
+        mode='lines+markers',
+        name='FC Horaria (lpm)',
+        line=dict(color='#13325B', width=2.5),
+        marker=dict(size=4, color='#C8102E')
+    ))
+
+    fig.add_hline(
+        y=fc_prom,
+        line_dash="dot",
+        line_color="#0284c7",
+        annotation_text=f"Promedio: {fc_prom} lpm",
+        annotation_position="bottom right",
+        annotation_font_size=10
+    )
+
+    fig.update_layout(
+        title=dict(text="<b>Tacograma Horario y Variabilidad Circadiana (24h)</b>", font=dict(size=13, color="#13325B")),
+        height=240,
+        margin=dict(l=35, r=20, t=35, b=25),
+        xaxis=dict(title="", tickfont=dict(size=9), showgrid=True, gridcolor="#f1f5f9"),
+        yaxis=dict(title="lpm", tickfont=dict(size=9), showgrid=True, gridcolor="#f1f5f9"),
+        plot_bgcolor="#ffffff",
+        paper_bgcolor="#ffffff",
+        showlegend=False
+    )
+    return fig
+
 # ==========================================
 # 2. SELECCIÓN DE MODALIDAD DIAGNÓSTICA
 # ==========================================
@@ -486,7 +546,7 @@ with st.sidebar:
     if st.button("Cerrar Sesión", use_container_width=True):
         cerrar_sesion()
         st.rerun()
-    st.caption("CENCARDIO · Workstation v11.0")
+    st.caption("CENCARDIO · Workstation v11.1")
 
 # Header institucional
 c_head1, c_head2 = st.columns([1, 6])
@@ -547,7 +607,6 @@ def extraer_datos_holter(pdf_bytes, filename=""):
     m_id = re.search(r"(?:ID\s*Paciente|ID|C\.?C\.?|Doc\.?|Historia)\s*[:\.]?\s*(\d{5,12})", texto, re.IGNORECASE)
     d["cedula"] = m_id.group(1) if m_id else ""
 
-    # Frecuencias basales
     fc_p = re.search(r"Prom\.?\s*(\d{2,3})", texto)
     d["fc_prom"] = int(fc_p.group(1)) if fc_p else 75
     fc_max = re.search(r"M[áa]x\s*(\d{2,3})", texto)
@@ -559,7 +618,6 @@ def extraer_datos_holter(pdf_bytes, filename=""):
     fc_noc = re.search(r"Noche.*?Prom\.?\s*(\d{2,3})", texto)
     d["fc_noc"] = int(fc_noc.group(1)) if fc_noc else max(45, int(d["fc_prom"] * 0.90))
 
-    # Eventos cronotrópicos independientes (Taquicardia / Bradicardia)
     taqui_m = re.search(r"Taquicardia\s+(\d+)(?:[^\n\r\d]+(\d{2,3})\s*:\s*[^\n\r]+)?(?:[^\n\r\d]+(\d+)\s+latidos)?", texto)
     d["taqui_conteo"] = int(taqui_m.group(1)) if taqui_m else 0
     d["taqui_fc_max"] = int(taqui_m.group(2)) if (taqui_m and taqui_m.group(2)) else d["fc_max"]
@@ -570,7 +628,6 @@ def extraer_datos_holter(pdf_bytes, filename=""):
     d["bradi_fc_min"] = int(bradi_m.group(2)) if (bradi_m and bradi_m.group(2)) else d["fc_min"]
     d["bradi_duracion"] = int(bradi_m.group(3)) if (bradi_m and bradi_m.group(3)) else 0
 
-    # Pausas y Bloqueos AV
     pausa_match = re.search(r"\bPausa\s+(\d+)", texto)
     d["pausas"] = int(pausa_match.group(1)) if pausa_match else 0
     p_max_m = re.search(r"Pausa.*?M[áa]x\.\s*longitud\s*([\d,\.]+)\s*s", texto)
@@ -579,7 +636,6 @@ def extraer_datos_holter(pdf_bytes, filename=""):
     lat_caido_m = re.search(r"Latidos?\s+ca[íi]dos?\s+(\d+)", texto)
     d["latidos_caidos"] = int(lat_caido_m.group(1)) if lat_caido_m else 0
 
-    # Ectopias Ventriculares
     ev_m = re.search(r"Latidos ventriculares\s*:\s*([\d\.]+)", texto)
     d["ev_total"] = limpiar_numero(ev_m.group(1)) if ev_m else 0
     tv_m = re.search(r"\bTV\s+([\d\.]+)", texto)
@@ -589,13 +645,11 @@ def extraer_datos_holter(pdf_bytes, filename=""):
     big_m = re.search(r"Bigeminismo\s+([\d\.]+)", texto)
     d["bigeminismo"] = limpiar_numero(big_m.group(1)) if big_m else 0
 
-    # Ectopias Supraventriculares
     esv_m = re.search(r"Latidos supraventriculares\s*:\s*([\d\.]+)", texto)
     d["esv_total"] = limpiar_numero(esv_m.group(1)) if esv_m else 0
     tsv_m = re.search(r"\bTSV\s+([\d\.]+)", texto)
     d["tsv_episodios"] = limpiar_numero(tsv_m.group(1)) if tsv_m else 0
 
-    # Detección bidireccional del ST (Elevación y Depresión)
     st_dep = re.search(r"Depresi[óo]n ST\s+(\d+)\s*(-?[\d,\.]*)", texto)
     st_elev = re.search(r"Elevaci[óo]n ST\s+(\d+)\s*([\d,\.]*)", texto)
     
@@ -607,7 +661,6 @@ def extraer_datos_holter(pdf_bytes, filename=""):
 
     d["st_episodios"] = d["st_dep_episodios"] + d["st_elev_episodios"]
 
-    # VFC y Repolarización
     sdnn_m = re.search(r"Valor de 24 horas\s+[\d\.,]+\s+([\d\.,]+)", texto)
     d["sdnn_24h"] = limpiar_numero(sdnn_m.group(1)) if sdnn_m else 85
     qtc_m = re.search(r"Todos los per[íi]odos\s+[\d\.,]+\s+[\d\.,]+\s+([\d\.,]+)", texto)
@@ -619,10 +672,8 @@ def extraer_datos_holter(pdf_bytes, filename=""):
     return d
 
 def redactar_informe_holter_11_puntos(d, perfil):
-    # 1. Ritmo y Cronotropismo
     p1 = f"1. Ritmo sinusal con frecuencia cardiaca promedio de {d['fc_prom']} latidos por minuto (Diurna: {d['fc_dia']} lpm / Nocturna: {d['fc_noc']} lpm)."
 
-    # 2. PUNTO INDEPENDIENTE: Eventos cronotrópicos (Taquicardia / Bradicardia sinusal)
     eventos_crono = []
     if d["taqui_conteo"] > 0:
         det_t = f"{d['taqui_conteo']} episodios de taquicardia sinusal (FC máxima {d['taqui_fc_max']} lpm"
@@ -643,13 +694,8 @@ def redactar_informe_holter_11_puntos(d, perfil):
     else:
         p2 = "2. Eventos cronotrópicos: Sin episodios de bradicardia patológica ni taquicardias sostenidas de relevancia clínica."
 
-    # 3. Intervalos PR y QTc
-    if d["qtc_prom"] > 460:
-        p3 = f"3. Intervalos PR normales y QTc prolongado (promedio {d['qtc_prom']} ms)."
-    else:
-        p3 = f"3. Intervalos PR normales y QTc normales ({d['qtc_prom']} ms)."
+    p3 = f"3. Intervalos PR normales y QTc prolongado (promedio {d['qtc_prom']} ms)." if d["qtc_prom"] > 460 else f"3. Intervalos PR normales y QTc normales ({d['qtc_prom']} ms)."
 
-    # 4. Segmento ST (Detección cuantitativa de Elevación o Depresión + Correlación DX)
     es_isq = (d["st_episodios"] > 0) or any(k in d.get("dx_motivo", "") for k in ["ANGINA", "INFARTO", "ISQUEMIA", "CORONAR", "IAM", "SCA", "NECROSIS", "DOLOR"])
     if es_isq:
         det_st = []
@@ -658,14 +704,10 @@ def redactar_informe_holter_11_puntos(d, perfil):
         if d["st_elev_episodios"] > 0:
             det_st.append(f"{d['st_elev_episodios']} episodios de elevación del ST, máx. +{d['st_elev_mm']} mm")
         
-        if det_st:
-            p4 = f"4. Alteraciones isquémicas del segmento ST ({', '.join(det_st)})."
-        else:
-            p4 = "4. Alteraciones isquémicas del segmento ST."
+        p4 = f"4. Alteraciones isquémicas del segmento ST ({', '.join(det_st)})." if det_st else "4. Alteraciones isquémicas del segmento ST."
     else:
         p4 = "4. Sin alteraciones isquémicas del segmento ST."
 
-    # 5. Conducción AV
     if d["latidos_caidos"] > 0:
         p5 = f"5. Alteración de la conducción AV por {d['latidos_caidos']} latidos caídos."
     elif d["pausas"] > 0 and float(d["pausa_max_seg"]) >= 2.0:
@@ -673,14 +715,9 @@ def redactar_informe_holter_11_puntos(d, perfil):
     else:
         p5 = "5. Sin Alteración de la conducción AV."
 
-    # 6. Conducción Intraventricular (Detección fisiopatológica por antecedente / EPOC)
     tiene_bloqueo = any(k in d.get("dx_motivo", "") for k in ["EPOC", "PULMONAR", "BLOQUEO", "RAMA", "BRD", "BRI", "BCRD", "BCRI", "QRS", "CARDIOPATIA"])
-    if tiene_bloqueo:
-        p6 = "6. Alteración en la conducción intraventricular por bloqueo completo de rama."
-    else:
-        p6 = "6. Sin Alteración en la conducción intraventricular."
+    p6 = "6. Alteración en la conducción intraventricular por bloqueo completo de rama." if tiene_bloqueo else "6. Sin Alteración en la conducción intraventricular."
 
-    # 7. Ectopias
     ect = []
     if d["esv_total"] > 0:
         txt_s = f"ectopias supraventriculares ({d['esv_total']} ESV"
@@ -703,15 +740,9 @@ def redactar_informe_holter_11_puntos(d, perfil):
         txt_v += ")"
         ect.append(txt_v)
 
-    if ect:
-        p7 = f"7. Alteración de los impulsos por {' y '.join(ect)}."
-    else:
-        p7 = "7. Sin alteración de los impulsos ectópicos de relevancia clínica."
-
-    # 8. Síntomas
+    p7 = f"7. Alteración de los impulsos por {' y '.join(ect)}." if ect else "7. Sin alteración de los impulsos ectópicos de relevancia clínica."
     p8 = f"8. El paciente refirió síntomas ({d['eventos_paciente']} eventos marcados en diario)." if d["eventos_paciente"] > 0 else "8. No refirió síntomas."
 
-    # 9. Variabilidad de la FC (Task Force ESC/NASPE)
     sdnn = d["sdnn_24h"]
     if sdnn <= 60:
         p9 = "9. Variabilidad Severamente Disminuida de la FC."
@@ -723,13 +754,9 @@ def redactar_informe_holter_11_puntos(d, perfil):
         p9 = "9. Variabilidad Conservada de la FC."
         riesgo = "Bajo riesgo / Normal"
 
-    # 10. Pausas patológicas
     p10 = f"10. Se registraron {d['pausas']} pausas significativas (máx. {d['pausa_max_seg']} s)." if d["pausas"] > 0 else "10. No hay pausas significativas."
-
-    # 11. Estratificación de Riesgo
     p11 = f"11. Riesgo del paciente SDNN 20 a 24 HRS ({riesgo})."
 
-    # Conclusión Diagnóstica Integrada
     c_diag = []
     if 60 <= d['fc_prom'] <= 100:
         c_diag.append(f"Ritmo sinusal con respuesta ventricular promedio conservada ({d['fc_prom']} lpm).")
@@ -1020,10 +1047,8 @@ def inyectar_pdf_universal(pdf_bytes, texto_informe, paciente_nom, perfil, cod_u
     else:
         rect_caja = fitz.Rect(35, 505, 565, 680)
 
-    # Blanqueado previo total del área
     pagina1.draw_rect(rect_caja, color=None, fill=(1, 1, 1), overlay=True)
 
-    # Auto-escalado de fuente para garantizar inclusión completa sin truncamiento
     font_size_optimo = 5.6
     for fs in [6.2, 5.9, 5.6, 5.3, 5.0, 4.7, 4.4, 4.2]:
         doc_test = fitz.open(stream=pdf_bytes, filetype="pdf")
@@ -1036,7 +1061,6 @@ def inyectar_pdf_universal(pdf_bytes, texto_informe, paciente_nom, perfil, cod_u
 
     pagina1.insert_textbox(rect_caja, texto_informe, fontsize=font_size_optimo, fontname="helv", color=(0, 0, 0), align=fitz.TEXT_ALIGN_LEFT)
 
-    # Blanqueado inferior y estampación de QR forense (Res. 3100)
     rect_inferior = fitz.Rect(230, y_base - 58, pagina1.rect.width - 36, y_base + 12)
     pagina1.draw_rect(rect_inferior, color=None, fill=(1, 1, 1), overlay=True)
 
@@ -1049,7 +1073,6 @@ def inyectar_pdf_universal(pdf_bytes, texto_informe, paciente_nom, perfil, cod_u
     pagina1.insert_text(fitz.Point(276, y_base - 9), "Res. 3100 de 2019 - MinSalud", fontsize=4.7, fontname="helv", color=(0.25, 0.25, 0.25))
     pagina1.insert_text(fitz.Point(276, y_base), f"Cód: {cod_uuid[:12]}...", fontsize=4.5, fontname="helv", color=(0.4, 0.4, 0.4))
 
-    # Firma institucional
     firma_bytes = procesar_firma_transparente()
     if firma_bytes and estampador_activo:
         fx0 = (rects_f[0].x0 + 10) if rects_f else 380
@@ -1110,7 +1133,6 @@ with tab_procesar:
 
         datos = st.session_state.datos_actuales
 
-        # Métricas interactivas según modalidad
         if "Holter" in modalidad_seleccionada:
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("FC Promedio (24h)", f"{datos['fc_prom']} lpm", f"Día {datos['fc_dia']} | Noche {datos['fc_noc']}")
@@ -1293,7 +1315,7 @@ with tab_historial:
             
             if busqueda.lower() in pac_nom.lower():
                 nom_archivo_copia = normalizar_nombre_archivo(pac_nom)
-                with st.expander(f"👤 {pac_nom} | 🩺 {mod_nom} ({cups_cod}) | 📅 {fecha} | 👨‍⚕️ {med_firm}"):
+                with st.expander(f"👤 {pac_nom} | 🩺 {mod_nom} ({cups_cod}) | 📅 {fecha} | 👨‍⚕️️ {med_firm}"):
                     c_det1, c_det2, c_desc, c_del = st.columns([2.5, 2, 2, 1.5])
                     c_det1.write(f"**Procedimiento:** {cups_cod}\n**Hallazgo Clave:** {param_clv}")
                     c_det2.write(f"**Certificado Forense:**\n`{cod_ver}`")
