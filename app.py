@@ -14,14 +14,15 @@ import uuid
 import urllib.parse
 
 st.set_page_config(
-    page_title="Centro Cardiovascular Colombiano CENCARDIO",
+    page_title="Centro Cardiovascular Colombiano CENCARDIO · Workstation",
     page_icon="🫀",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-# ==========================================
-# UTILIDAD: RECURSOS E IDENTIDAD INSTITUCIONAL
-# ==========================================
+# ==============================================================================
+# SISTEMA DE DISEÑO INSTITUCIONAL (NIVEL CARDIOVASCULAR ALTA COMPLEJIDAD)
+# ==============================================================================
 @st.cache_data
 def obtener_logo_b64():
     for nom in ["cencardio.jpg", "cencardio.png", "cencardio.jpeg", "logo.png", "logo.jpg"]:
@@ -32,111 +33,225 @@ def obtener_logo_b64():
             return f"data:image/{mime};base64,{b64}"
     return None
 
-def cargar_fondo():
-    for ext in ["fondo.jpg", "fondo.png", "fondo.jpeg"]:
-        if os.path.exists(ext):
-            with open(ext, "rb") as f:
-                b64 = base64.b64encode(f.read()).decode()
-            mime = "png" if ext.endswith("png") else "jpeg"
-            return f"""
-            <style>
-            .stApp {{
-                background-image: linear-gradient(rgba(244, 247, 250, 0.93), rgba(244, 247, 250, 0.93)), 
-                                  url("data:image/{mime};base64,{b64}");
-                background-size: cover;
-                background-position: center;
-                background-attachment: fixed;
-            }}
-            </style>
-            """
+def cargar_estilos_institucionales():
     return """
     <style>
-    .stApp { background: linear-gradient(140deg, #f0f4f8 0%, #f8fafc 50%, #edf2f7 100%); }
-    </style>
-    """
+    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap');
 
-st.markdown(cargar_fondo(), unsafe_allow_html=True)
+    html, body, [class*="css"] {
+        font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif !important;
+        color: #1e293b;
+    }
 
-st.markdown("""
-    <style>
+    .stApp {
+        background-color: #f8fafc;
+        background-image: 
+            radial-gradient(at 0% 0%, rgba(10, 37, 64, 0.03) 0px, transparent 50%),
+            radial-gradient(at 100% 100%, rgba(200, 16, 46, 0.02) 0px, transparent 50%);
+    }
+
     header[data-testid="stHeader"] { background: transparent !important; }
     div[data-testid="stDecoration"] { display: none !important; }
-    .block-container { padding-top: 1.5rem !important; padding-bottom: 2.5rem !important; }
-    div[data-testid="stForm"] { border: none !important; padding: 0 !important; }
+    .block-container { padding-top: 1.2rem !important; padding-bottom: 2.5rem !important; }
 
-    .cencardio-card {
+    /* Barra Superior Institucional */
+    .top-hospital-bar {
         background: #ffffff;
         border: 1px solid #e2e8f0;
-        border-radius: 18px;
-        padding: 2.4rem 2.8rem;
-        box-shadow: 0 12px 30px -8px rgba(19, 50, 91, 0.12);
-        max-width: 520px;
-        margin: 2rem auto;
-        text-align: center;
+        border-radius: 16px;
+        padding: 0.9rem 1.6rem;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        box-shadow: 0 4px 20px -2px rgba(10, 37, 64, 0.04);
+        margin-bottom: 1.5rem;
     }
-    .cencardio-logo-img { max-width: 175px; height: auto; margin-bottom: 1rem; display: inline-block; }
-    .cencardio-title { color: #13325b; font-size: 1.35rem; font-weight: 800; letter-spacing: 0.3px; line-height: 1.3; margin-top: 0.4rem; text-transform: uppercase; }
-    .cencardio-sub { color: #c8102e; font-size: 0.88rem; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 1.8rem; }
+    .inst-badge {
+        background: #e0f2fe;
+        color: #0369a1;
+        font-size: 0.72rem;
+        font-weight: 700;
+        padding: 4px 10px;
+        border-radius: 20px;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+        border: 1px solid #bae6fd;
+        display: inline-block;
+    }
 
-    h1 { color: #13325b !important; font-weight: 800 !important; }
-    h2, h3 { color: #1b365d !important; }
-    [data-testid="stMetricValue"] { color: #13325b !important; font-weight: 700; }
-    
-    .stButton > button {
-        background-color: #13325b !important;
-        color: white !important;
+    /* Pestañas de Consola Hospitalaria */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+        background: #ffffff;
+        padding: 6px;
+        border-radius: 12px;
+        border: 1px solid #e2e8f0;
+        box-shadow: 0 2px 10px rgba(10, 37, 64, 0.03);
+        margin-bottom: 1.2rem;
+    }
+    .stTabs [data-baseweb="tab"] {
         border-radius: 8px !important;
+        padding: 9px 22px !important;
+        font-weight: 700 !important;
+        font-size: 0.88rem !important;
+        color: #64748b !important;
         border: none !important;
-        font-weight: 600 !important;
-        padding: 0.55rem 1.4rem !important;
         transition: all 0.2s ease;
     }
-    .stButton > button:hover {
-        background-color: #c8102e !important;
-        color: white !important;
+    .stTabs [data-baseweb="tab"]:hover {
+        color: #0a2540 !important;
+        background: #f1f5f9;
+    }
+    .stTabs [aria-selected="true"] {
+        background-color: #0a2540 !important;
+        color: #ffffff !important;
+        box-shadow: 0 4px 12px rgba(10, 37, 64, 0.15) !important;
     }
 
-    textarea {
+    /* Menú Lateral */
+    div[data-testid="stSidebar"] {
         background-color: #ffffff !important;
-        border: 1px solid #cbd5e1 !important;
-        border-radius: 8px !important;
-        font-family: monospace !important;
-        font-size: 12.5px !important;
+        border-right: 1px solid #e2e8f0 !important;
+        box-shadow: 2px 0 16px rgba(10, 37, 64, 0.02) !important;
     }
-    .preview-container {
-        border: 2px solid #cbd5e1;
+    .specialist-card {
+        background: linear-gradient(135deg, #0a2540 0%, #133863 100%);
+        border-radius: 14px;
+        padding: 1.1rem;
+        color: #ffffff;
+        margin-bottom: 1.2rem;
+        box-shadow: 0 6px 18px -3px rgba(10, 37, 64, 0.25);
+    }
+    .specialist-title { font-size: 0.95rem; font-weight: 800; letter-spacing: 0.2px; }
+    .specialist-sub { font-size: 0.74rem; color: #93c5fd; font-weight: 600; text-transform: uppercase; margin-top: 2px; }
+    .specialist-reg { font-size: 0.72rem; color: #cbd5e1; font-family: 'JetBrains Mono', monospace; margin-top: 6px; }
+
+    /* Radio buttons estilizados */
+    div[data-testid="stRadio"] > div { gap: 8px; }
+    div[data-testid="stRadio"] label {
+        background: #f8fafc;
+        border: 1.5px solid #e2e8f0;
+        padding: 10px 14px;
         border-radius: 10px;
-        box-shadow: 0 6px 14px -3px rgba(19, 50, 91, 0.08);
-        background: white;
-        padding: 6px;
+        cursor: pointer;
+        transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+        font-weight: 600;
+        font-size: 0.86rem;
+        color: #334155;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.02);
+    }
+    div[data-testid="stRadio"] label:hover {
+        border-color: #0284c7;
+        background: #f0f9ff;
+        color: #0369a1;
+        transform: translateY(-1px);
     }
 
+    /* Tarjetas de Métricas */
+    div[data-testid="stMetric"] {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 14px;
+        padding: 1rem 1.2rem;
+        box-shadow: 0 4px 14px -2px rgba(10, 37, 64, 0.04);
+        border-top: 4px solid #0a2540;
+    }
+    [data-testid="stMetricValue"] {
+        color: #0a2540 !important;
+        font-weight: 800 !important;
+        font-size: 1.55rem !important;
+    }
+    [data-testid="stMetricLabel"] {
+        color: #64748b !important;
+        font-weight: 600 !important;
+        font-size: 0.78rem !important;
+        text-transform: uppercase;
+        letter-spacing: 0.4px;
+    }
+
+    /* SEMAFORIZACIÓN / TRIAGE CLÍNICO */
     .triage-rojo {
-        background: #fee2e2; border-left: 6px solid #dc2626; color: #991b1b;
-        padding: 0.9rem 1.1rem; border-radius: 8px; margin-bottom: 1rem; font-weight: 600;
+        background: #fef2f2 !important; border: 1.5px solid #fecaca !important; border-left: 6px solid #dc2626 !important; color: #991b1b !important;
+        padding: 1rem 1.3rem !important; border-radius: 12px !important; margin-bottom: 1.2rem !important; font-size: 0.92rem !important; line-height: 1.5 !important;
     }
     .triage-amarillo {
-        background: #fef3c7; border-left: 6px solid #d97706; color: #92400e;
-        padding: 0.9rem 1.1rem; border-radius: 8px; margin-bottom: 1rem; font-weight: 600;
+        background: #fffbeb !important; border: 1.5px solid #fde68a !important; border-left: 6px solid #d97706 !important; color: #92400e !important;
+        padding: 1rem 1.3rem !important; border-radius: 12px !important; margin-bottom: 1.2rem !important; font-size: 0.92rem !important; line-height: 1.5 !important;
     }
     .triage-verde {
-        background: #dcfce7; border-left: 6px solid #16a34a; color: #166534;
-        padding: 0.9rem 1.1rem; border-radius: 8px; margin-bottom: 1rem; font-weight: 600;
-    }
-    .clinical-panel {
-        background: #f8fafc; border: 1px solid #cbd5e1; border-left: 6px solid #13325b;
-        padding: 1rem 1.2rem; border-radius: 8px; margin-bottom: 1rem; font-size: 0.92rem; line-height: 1.5;
-    }
-    .badge-cups {
-        display: inline-block; background: #e0f2fe; color: #0369a1; padding: 3px 8px;
-        border-radius: 6px; font-weight: 700; font-size: 0.78rem; margin-bottom: 0.5rem;
+        background: #f0fdf4 !important; border: 1.5px solid #bbf7d0 !important; border-left: 6px solid #16a34a !important; color: #166534 !important;
+        padding: 1rem 1.3rem !important; border-radius: 12px !important; margin-bottom: 1.2rem !important; font-size: 0.92rem !important; line-height: 1.5 !important;
     }
     .dinamica-status {
         background: #ecfdf5; border: 1px solid #a7f3d0; color: #065f46;
         padding: 0.6rem 0.9rem; border-radius: 8px; font-weight: 600; font-size: 0.88rem; margin-bottom: 0.8rem;
     }
+
+    /* Botones Institucionales */
+    .stButton > button {
+        background-color: #0a2540 !important;
+        color: #ffffff !important;
+        border-radius: 10px !important;
+        border: none !important;
+        font-weight: 700 !important;
+        font-size: 0.88rem !important;
+        padding: 0.65rem 1.4rem !important;
+        box-shadow: 0 4px 12px rgba(10, 37, 64, 0.15) !important;
+        transition: all 0.2s ease !important;
+    }
+    .stButton > button:hover {
+        background-color: #c8102e !important;
+        color: #ffffff !important;
+        transform: translateY(-1px) !important;
+    }
+
+    /* Estilo del botón nativo de enlace a WhatsApp */
+    div[data-testid="stLinkButton"] a {
+        background-color: #25D366 !important;
+        color: #ffffff !important;
+        font-weight: 800 !important;
+        border-radius: 10px !important;
+        padding: 0.65rem 1rem !important;
+        text-align: center !important;
+        border: none !important;
+        box-shadow: 0 4px 12px rgba(37, 211, 102, 0.25) !important;
+        transition: all 0.2s ease !important;
+    }
+    div[data-testid="stLinkButton"] a:hover {
+        background-color: #1eb854 !important;
+        color: #ffffff !important;
+        transform: translateY(-1px) !important;
+    }
+
+    textarea {
+        background-color: #ffffff !important;
+        border: 1.5px solid #cbd5e1 !important;
+        border-radius: 10px !important;
+        font-family: 'JetBrains Mono', monospace !important;
+        font-size: 12.5px !important;
+    }
+    .preview-container {
+        border: 2px solid #e2e8f0;
+        border-radius: 14px;
+        box-shadow: 0 8px 24px -4px rgba(10, 37, 64, 0.08);
+        background: #ffffff;
+        padding: 8px;
+    }
+
+    .cencardio-card {
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 20px;
+        padding: 2.6rem 2.8rem;
+        box-shadow: 0 20px 40px -12px rgba(10, 37, 64, 0.12);
+        max-width: 480px;
+        margin: 3rem auto;
+        text-align: center;
+    }
     </style>
-""", unsafe_allow_html=True)
+    """
+
+st.markdown(cargar_estilos_institucionales(), unsafe_allow_html=True)
 
 # ==========================================
 # 0. MÓDULO PÚBLICO: VALIDACIÓN POR QR (RES. 3100)
@@ -149,30 +264,34 @@ if "val" in params:
     fecha_val = urllib.parse.unquote(params.get("fec", datetime.now().strftime("%Y-%m-%d")))
     proc_val = urllib.parse.unquote(params.get("proc", "Procedimiento Cardiológico"))
 
-    c_v1, c_v2, c_v3 = st.columns([1, 2, 1])
+    c_v1, c_v2, c_v3 = st.columns([1, 1.8, 1])
     with c_v2:
         logo_data = obtener_logo_b64()
-        logo_html = f'<img src="{logo_data}" class="cencardio-logo-img" alt="Cencardio Logo">' if logo_data else '<div style="font-size:3rem; margin-bottom:0.4rem;">🫀</div>'
+        logo_html = f'<img src="{logo_data}" style="max-width:180px; margin-bottom:1rem;" alt="Cencardio Logo">' if logo_data else '<div style="font-size:3rem; margin-bottom:0.4rem;">🫀</div>'
 
         st.markdown(f"""
-            <div class="cencardio-card" style="max-width: 580px;">
+            <div class="cencardio-card">
                 {logo_html}
-                <div class="cencardio-title">Centro Cardiovascular Colombiano</div>
-                <div class="cencardio-sub">CENCARDIO · Certificado de Autenticidad</div>
-                <div style="background: #ecfdf5; border: 2px solid #10b981; border-radius: 12px; padding: 1.2rem; margin-bottom: 1.5rem; text-align: left;">
-                    <div style="color: #065f46; font-size: 1.1rem; font-weight: 800; margin-bottom: 0.5rem; display: flex; align-items: center; gap: 8px;">
-                        <span>✅</span> ESTUDIO MÉDICO VÁLIDO Y CERTIFICADO
+                <div style="font-size: 1.25rem; font-weight: 800; color: #0a2540; text-transform: uppercase;">
+                    Centro Cardiovascular Colombiano
+                </div>
+                <div style="font-size: 0.82rem; font-weight: 700; color: #c8102e; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 1.5rem;">
+                    CENCARDIO · Certificado de Autenticidad Forense
+                </div>
+                <div style="background: #f0fdf4; border: 1.5px solid #86efac; border-radius: 12px; padding: 1.3rem; margin-bottom: 1.5rem; text-align: left;">
+                    <div style="color: #166534; font-size: 1rem; font-weight: 800; margin-bottom: 0.6rem; display: flex; align-items: center; gap: 8px;">
+                        <span>✅</span> ESTUDIO MÉDICO CERTIFICADO Y VÁLIDO
                     </div>
-                    <div style="font-size: 0.9rem; color: #1f2937; line-height: 1.6;">
+                    <div style="font-size: 0.88rem; color: #1f2937; line-height: 1.6;">
                         <b>Procedimiento:</b> {proc_val}<br>
                         <b>Paciente:</b> {paciente_val}<br>
-                        <b>Médico Especialista:</b> {medico_val}<br>
+                        <b>Especialista Lector:</b> {medico_val}<br>
                         <b>Fecha de Emisión:</b> {fecha_val}<br>
-                        <b>Código Único Forense:</b> <span style="font-family: monospace; color: #0369a1;">{codigo_val}</span><br>
+                        <b>Identificador Único:</b> <span style="font-family: monospace; color: #0369a1; font-weight: 700;">{codigo_val}</span><br>
                         <b>Normativa:</b> Res. 3100 de 2019 / Habilitación MinSalud Colombia
                     </div>
                 </div>
-                <div style="font-size: 0.8rem; color: #64748b; line-height: 1.4;">
+                <div style="font-size: 0.78rem; color: #64748b; line-height: 1.4;">
                     Documento custodiado bajo el estándar de Historia Clínica Electrónica del Centro Cardiovascular Colombiano CENCARDIO.
                 </div>
             </div>
@@ -207,7 +326,7 @@ def generar_qr_verificacion(paciente, medico, fecha_str, codigo_uuid, proc_nombr
     )
     qr.add_data(url_completa)
     qr.make(fit=True)
-    img_qr = qr.make_image(fill_color="#13325b", back_color="white")
+    img_qr = qr.make_image(fill_color="#0a2540", back_color="white")
     
     buf = io.BytesIO()
     img_qr.save(buf, format="PNG")
@@ -243,7 +362,7 @@ def procesar_firma_transparente():
 
         img_gray = img.convert("L")
         alpha = img_gray.point(lambda p: 255 if p < 185 else 0, mode='L')
-        tinta = Image.new("RGBA", img.size, (19, 50, 91, 255))
+        tinta = Image.new("RGBA", img.size, (10, 37, 64, 255))
         tinta.putalpha(alpha)
 
         caja = tinta.getbbox()
@@ -321,7 +440,7 @@ def sincronizar_directorio_dinamica(df):
 
     conn.commit()
     conn.close()
-    return True, f"Se sincronizaron {registros} pacientes de Dinámica Gerencial."
+    return True, f"Se sincronizaron con éxito {registros} pacientes de Dinámica Gerencial."
 
 def buscar_telefono_dinamica(cedula):
     if not cedula:
@@ -411,16 +530,20 @@ def cerrar_sesion():
     st.session_state.usuario_actual = ""
 
 if not st.session_state.autenticado:
-    col_izq, col_central, col_der = st.columns([1, 1.8, 1])
+    col_izq, col_central, col_der = st.columns([1, 1.6, 1])
     with col_central:
         logo_data = obtener_logo_b64()
-        logo_html = f'<img src="{logo_data}" class="cencardio-logo-img" alt="Cencardio Logo">' if logo_data else '<div style="font-size:3rem; margin-bottom:0.4rem;">🫀</div>'
+        logo_html = f'<img src="{logo_data}" style="max-width:170px; margin-bottom:1rem;" alt="Cencardio Logo">' if logo_data else '<div style="font-size:3rem; margin-bottom:0.4rem;">🫀</div>'
 
         st.markdown(f"""
             <div class="cencardio-card">
                 {logo_html}
-                <div class="cencardio-title">Centro Cardiovascular Colombiano</div>
-                <div class="cencardio-sub">CENCARDIO · Workstation Diagnóstica</div>
+                <div style="font-size: 1.25rem; font-weight: 800; color: #0a2540; text-transform: uppercase;">
+                    Centro Cardiovascular Colombiano
+                </div>
+                <div style="font-size: 0.8rem; font-weight: 700; color: #c8102e; letter-spacing: 0.6px; text-transform: uppercase; margin-bottom: 1.8rem;">
+                    CENCARDIO · Workstation Diagnóstica
+                </div>
         """, unsafe_allow_html=True)
 
         with st.form("form_login"):
@@ -435,14 +558,14 @@ if not st.session_state.autenticado:
                     st.session_state.usuario_actual = medico_seleccionado["id"]
                     st.rerun()
                 else:
-                    st.error("❌ Contraseña incorrecta para el especialista.")
+                    st.error("❌ Contraseña incorrecta para el especialista seleccionado.")
         st.markdown('</div>', unsafe_allow_html=True)
     st.stop()
 
 perfil_activo = PERFILES_POR_ID[st.session_state.usuario_actual]
 
 # ==============================================================================
-# GRÁFICA DEL TACOGRAMA (DEFINIDA DE FORMA GLOBAL Y PROTEGIDA CONTRA NULOS)
+# GRÁFICA DEL TACOGRAMA (DECLARACIÓN GLOBAL PROTEGIDA)
 # ==============================================================================
 def generar_grafica_tacograma(d):
     fc_prom = d.get("fc_prom", 75)
@@ -464,7 +587,7 @@ def generar_grafica_tacograma(d):
     fig = go.Figure()
     fig.add_hrect(
         y0=60, y1=100, 
-        fillcolor="rgba(19, 50, 91, 0.05)", 
+        fillcolor="rgba(10, 37, 64, 0.04)", 
         line_width=0,
         annotation_text="Rango Normal (60-100)", 
         annotation_position="top left",
@@ -476,7 +599,7 @@ def generar_grafica_tacograma(d):
         x=horas, y=fc_curva,
         mode='lines+markers',
         name='FC Horaria (lpm)',
-        line=dict(color='#13325B', width=2.5),
+        line=dict(color='#0A2540', width=2.5),
         marker=dict(size=4, color='#C8102E')
     ))
 
@@ -490,7 +613,7 @@ def generar_grafica_tacograma(d):
     )
 
     fig.update_layout(
-        title=dict(text="<b>Tacograma Horario y Variabilidad Circadiana (24h)</b>", font=dict(size=13, color="#13325B")),
+        title=dict(text="<b>Tacograma Horario y Variabilidad Circadiana (24 Horas)</b>", font=dict(size=13, color="#0A2540")),
         height=240,
         margin=dict(l=35, r=20, t=35, b=25),
         xaxis=dict(title="", tickfont=dict(size=9), showgrid=True, gridcolor="#f1f5f9"),
@@ -507,29 +630,35 @@ def generar_grafica_tacograma(d):
 with st.sidebar:
     logo_data_sidebar = obtener_logo_b64()
     if logo_data_sidebar:
-        st.markdown(f'<div style="text-align:center; margin-bottom:1rem;"><img src="{logo_data_sidebar}" style="max-width:140px;"></div>', unsafe_allow_html=True)
+        st.markdown(f'<div style="text-align:center; margin-bottom:1.2rem;"><img src="{logo_data_sidebar}" style="max-width:145px;"></div>', unsafe_allow_html=True)
     
-    st.write(f"👤 Especialista: **{perfil_activo['nombre_completo']}**")
-    st.caption(f"{perfil_activo['especialidad']}\n{perfil_activo['registro']}")
-    
+    st.markdown(f"""
+        <div class="specialist-card">
+            <div class="specialist-title">{perfil_activo['nombre_completo']}</div>
+            <div class="specialist-sub">{perfil_activo['especialidad']}</div>
+            <div class="specialist-reg">{perfil_activo['registro']}</div>
+        </div>
+    """, unsafe_allow_html=True)
+
     firma_disponible = procesar_firma_transparente()
     if firma_disponible and perfil_activo["id"] in ["dr.amaya", "admin"]:
-        st.success("🖋️ Firma digital cargada.")
+        st.success("🖋️ Sello digitalizado cargado.")
         
     st.divider()
 
-    st.markdown("<b>🎛️ MODALIDAD DIAGNÓSTICA</b>", unsafe_allow_html=True)
+    st.markdown("<div style='font-size:0.78rem; font-weight:800; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:0.5rem;'>MODALIDAD DIAGNÓSTICA</div>", unsafe_allow_html=True)
     modalidad_seleccionada = st.radio(
-        "Seleccione el estudio a procesar:",
+        "Seleccione estudio:",
         [
-            "🫀 Holter ECG 24 Horas (CUPS 895001)",
-            "🩺 MAPA Tensional 24 Horas (CUPS 895003)",
+            "🫀 Holter ECG 24H (CUPS 895001)",
+            "🩺 MAPA Tensional 24H (CUPS 895003)",
             "🏃 Prueba de Esfuerzo (CUPS 893805)"
-        ]
+        ],
+        label_visibility="collapsed"
     )
 
     st.divider()
-    st.markdown("<b>🔗 Sincronizador Dinámica</b>", unsafe_allow_html=True)
+    st.markdown("<div style='font-size:0.78rem; font-weight:800; color:#64748b; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:0.5rem;'>SINCRONIZADOR DINÁMICA</div>", unsafe_allow_html=True)
     archivo_dinamica = st.file_uploader("Subir Directorio Dinámica (Excel o CSV)", type=["xlsx", "xls", "csv"], key="sync_dinamica")
     if archivo_dinamica is not None:
         try:
@@ -546,28 +675,24 @@ with st.sidebar:
     if st.button("Cerrar Sesión", use_container_width=True):
         cerrar_sesion()
         st.rerun()
-    st.caption("CENCARDIO · Workstation v11.1")
+    st.caption("CENCARDIO · Workstation Enterprise v12.1")
 
-# Header institucional
-c_head1, c_head2 = st.columns([1, 6])
-with c_head1:
-    if logo_data_sidebar:
-        st.image(logo_data_sidebar, width=95)
-    else:
-        st.markdown("<div style='font-size:2.6rem;'>🫀</div>", unsafe_allow_html=True)
-with c_head2:
-    st.markdown("""
-        <div style="padding-top: 3px;">
-            <div style="font-size: 1.55rem; font-weight: 800; color: #13325b; line-height: 1.2;">
+# Header institucional superior
+st.markdown("""
+    <div class="top-hospital-bar">
+        <div>
+            <div style="font-size: 1.35rem; font-weight: 800; color: #0a2540; line-height: 1.2;">
                 CENTRO CARDIOVASCULAR COLOMBIANO CENCARDIO
             </div>
-            <div style="font-size: 0.92rem; font-weight: 600; color: #c8102e; text-transform: uppercase;">
-                Estación Diagnóstica de Cardiología No Invasiva · Habilitación MinSalud Colombia
+            <div style="font-size: 0.82rem; font-weight: 700; color: #c8102e; text-transform: uppercase;">
+                Estación de Trabajo Diagnóstica · Cardiología No Invasiva
             </div>
         </div>
-    """, unsafe_allow_html=True)
-
-st.write("")
+        <div>
+            <span class="inst-badge">Habilitación MinSalud · Res. 3100 de 2019</span>
+        </div>
+    </div>
+""", unsafe_allow_html=True)
 
 tab_procesar, tab_historial = st.tabs(["📥 Procesamiento del Estudio", "📁 Archivo Clínico y Facturación"])
 
@@ -1025,16 +1150,12 @@ def inyectar_pdf_universal(pdf_bytes, texto_informe, paciente_nom, perfil, cod_u
     pagina1 = doc[0]
 
     rects_h = pagina1.search_for("Hallazgos:")
-    if not rects_h:
-        rects_h = pagina1.search_for("Conclusiones:")
-    if not rects_h:
-        rects_h = pagina1.search_for("Interpretación:")
+    if not rects_h: rects_h = pagina1.search_for("Conclusiones:")
+    if not rects_h: rects_h = pagina1.search_for("Interpretación:")
 
     rects_f = pagina1.search_for("Firma del médico")
-    if not rects_f:
-        rects_f = pagina1.search_for("Firma del operador")
-    if not rects_f:
-        rects_f = pagina1.search_for("Firma:")
+    if not rects_f: rects_f = pagina1.search_for("Firma del operador")
+    if not rects_f: rects_f = pagina1.search_for("Firma:")
 
     y_base = rects_f[0].y0 if rects_f else 740
 
@@ -1101,7 +1222,7 @@ with tab_procesar:
         cups_actual = "CUPS 893805"
         mod_nombre = "Prueba de Esfuerzo Computarizada"
 
-    st.markdown(f"### 📥 Cargar Estudio para {mod_nombre} ({cups_actual})")
+    st.markdown(f"#### 📥 Cargar Estudio para {mod_nombre} ({cups_actual})")
     uploaded_file = st.file_uploader(f"Seleccione el informe de {mod_nombre} en formato PDF:", type=["pdf"])
 
     if uploaded_file is not None:
@@ -1133,6 +1254,86 @@ with tab_procesar:
 
         datos = st.session_state.datos_actuales
 
+        # ==========================================
+        # SEMAFORIZACIÓN Y TRIAGE CLÍNICO DINÁMICO
+        # ==========================================
+        alertas_criticas = []
+        alertas_moderadas = []
+
+        if "Holter" in modalidad_seleccionada:
+            if datos["sdnn_24h"] <= 60:
+                alertas_criticas.append(f"Variabilidad severamente disminuida (SDNN {datos['sdnn_24h']} ms: Alto riesgo cardiovascular).")
+            elif datos["sdnn_24h"] <= 120:
+                alertas_moderadas.append(f"Variabilidad de la FC disminuida (SDNN {datos['sdnn_24h']} ms: Riesgo medio).")
+
+            if datos["tv_episodios"] > 0:
+                alertas_criticas.append(f"Se registraron {datos['tv_episodios']} rachas de Taquicardia Ventricular (TV).")
+
+            if datos["pausas"] > 0 or datos["latidos_caidos"] > 0:
+                alertas_criticas.append(f"Trastorno de conducción AV: {datos['pausas']} pausas significativas, {datos['latidos_caidos']} latidos caídos.")
+
+            es_isq = (datos["st_episodios"] > 0) or any(k in datos.get("dx_motivo", "") for k in ["ANGINA", "INFARTO", "ISQUEMIA", "CORONAR", "IAM", "SCA", "NECROSIS", "DOLOR"])
+            if es_isq:
+                alertas_moderadas.append(f"Alteraciones isquémicas del ST detectadas ({datos['st_episodios']} episodios / Antecedente: {datos.get('dx_motivo', 'Isquemia')}).")
+
+            if datos["qtc_prom"] > 460:
+                alertas_moderadas.append(f"Intervalo QTc prolongado (promedio {datos['qtc_prom']} ms).")
+
+            if datos["taqui_conteo"] >= 50:
+                alertas_moderadas.append(f"Alta carga de taquicardia sinusal ({datos['taqui_conteo']} episodios, máx. {datos['taqui_fc_max']} lpm).")
+            if datos["bradi_conteo"] >= 20:
+                alertas_moderadas.append(f"Bradicardia sinusal frecuente ({datos['bradi_conteo']} episodios, mín. {datos['bradi_fc_min']} lpm).")
+
+        elif "MAPA" in modalidad_seleccionada:
+            caida = ((datos["pas_dia"] - datos["pas_noc"]) / datos["pas_dia"]) * 100 if datos["pas_dia"] > 0 else 0
+            if caida < 0:
+                alertas_criticas.append(f"Patrón circadiano Riser / Invertido (PA nocturna superior a la diurna, alto riesgo de evento vascular cerebral).")
+            elif caida < 10:
+                alertas_moderadas.append(f"Patrón circadiano No-Dipper (atenuación del descenso fisiológico nocturno: {caida:.1f}%).")
+
+            if datos["pas_24h"] >= 140 or datos["pad_24h"] >= 90:
+                alertas_criticas.append(f"Hipertensión arterial ambulatoria severa (Promedio 24h: {datos['pas_24h']}/{datos['pad_24h']} mmHg).")
+            elif datos["pas_24h"] >= 130 or datos["pad_24h"] >= 80:
+                alertas_moderadas.append(f"Promedio de 24 horas por encima de metas normotensivas ({datos['pas_24h']}/{datos['pad_24h']} mmHg).")
+
+            if (datos["pas_24h"] - datos["pad_24h"]) > 53:
+                alertas_moderadas.append(f"Presión de pulso ensanchada ({datos['pas_24h'] - datos['pad_24h']} mmHg: marcador de rigidez arterial).")
+
+        else:
+            if datos["st_mm"] >= 2.0:
+                alertas_criticas.append(f"Respuesta isquémica severa al esfuerzo (infradesnivel ST de {datos['st_mm']} mm).")
+            elif datos["st_mm"] >= 1.0:
+                alertas_moderadas.append(f"Prueba positiva para isquemia miocárdica inducible (infradesnivel ST de {datos['st_mm']} mm).")
+
+            if datos["porc_fcm"] < 85:
+                alertas_moderadas.append(f"Prueba ergométrica insuficiente (alcanzó solo el {datos['porc_fcm']}% de la FCM prevista).")
+
+            if datos["mets"] < 5.0:
+                alertas_moderadas.append(f"Capacidad funcional disminuida ({datos['mets']} METs alcanzados).")
+
+        # RENDERIZADO DEL SEMÁFORO
+        if alertas_criticas:
+            st.markdown(f"""
+                <div class="triage-rojo">
+                    <b>🔴 ALERTA CRÍTICA: Hallazgos de Alto Riesgo Cardiovascular Detectados</b><br>
+                    • {'<br>• '.join(alertas_criticas)}
+                </div>
+            """, unsafe_allow_html=True)
+        elif alertas_moderadas:
+            st.markdown(f"""
+                <div class="triage-amarillo">
+                    <b>🟡 PRECAUCIÓN CLÍNICA: Parámetros Fuera de Meta o Hallazgos Relevantes</b><br>
+                    • {'<br>• '.join(alertas_moderadas)}
+                </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown("""
+                <div class="triage-verde">
+                    <b>🟢 ESTUDIO NORMAL / COMPENSADO: Sin Criterios de Alarma Electrocardiográfica ni Hemodinámica</b>
+                </div>
+            """, unsafe_allow_html=True)
+
+        # Métricas interactivas según modalidad
         if "Holter" in modalidad_seleccionada:
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("FC Promedio (24h)", f"{datos['fc_prom']} lpm", f"Día {datos['fc_dia']} | Noche {datos['fc_noc']}")
@@ -1154,7 +1355,7 @@ with tab_procesar:
             pas_vals = [datos["pas_dia"] if (6 <= h <= 21) else datos["pas_noc"] for h in range(24)]
             pad_vals = [datos["pad_dia"] if (6 <= h <= 21) else datos["pad_noc"] for h in range(24)]
             fig_mapa.add_trace(go.Scatter(x=horas, y=pas_vals, name="Sistólica (PAS)", line=dict(color="#C8102E", width=2.5)))
-            fig_mapa.add_trace(go.Scatter(x=horas, y=pad_vals, name="Diastólica (PAD)", line=dict(color="#13325B", width=2.5)))
+            fig_mapa.add_trace(go.Scatter(x=horas, y=pad_vals, name="Diastólica (PAD)", line=dict(color="#0A2540", width=2.5)))
             fig_mapa.add_hline(y=130, line_dash="dot", line_color="#dc2626", annotation_text="Límite 24h PAS (130)")
             fig_mapa.add_hline(y=80, line_dash="dot", line_color="#0284c7", annotation_text="Límite 24h PAD (80)")
             fig_mapa.update_layout(title="<b>Perfil Ambulatorio de Presión Arterial (24 Horas)</b>", height=230, margin=dict(l=30, r=20, t=35, b=20))
@@ -1224,6 +1425,9 @@ with tab_procesar:
                     )
                     st.success(f"✅ Guardado en archivo clínico: {nombre_confirmado}")
 
+            # ==========================================
+            # DESPACHO POR WHATSAPP 100% FUNCIONAL
+            # ==========================================
             if telefono_input:
                 tel_limpio = re.sub(r'\D', '', telefono_input)
                 if not tel_limpio.startswith("57") and len(tel_limpio) == 10:
@@ -1238,15 +1442,14 @@ Puede consultar su certificación médica oficial escaneando el código QR de su
 
 Le deseamos un excelente día."""
 
-                wa_url = f"https://api.whatsapp.com/send?phone={tel_limpio}&text={urllib.parse.quote(msg_wa)}"
+                wa_url = f"https://wa.me/{tel_limpio}?text={urllib.parse.quote(msg_wa)}"
                 
-                st.markdown(f"""
-                    <a href="{wa_url}" target="_blank" style="text-decoration:none;">
-                        <div style="background-color: #25D366; color: white; text-align: center; padding: 0.6rem; border-radius: 8px; font-weight: 700; margin-top: 0.6rem;">
-                            📲 ENVIAR RESULTADO OFICIAL POR WHATSAPP
-                        </div>
-                    </a>
-                """, unsafe_allow_html=True)
+                st.write("")
+                st.link_button(
+                    label="📲 ENVIAR RESULTADO OFICIAL POR WHATSAPP",
+                    url=wa_url,
+                    use_container_width=True
+                )
 
             st.write("")
             if st.button("🔄 Cargar Nuevo Estudio", use_container_width=True):
@@ -1315,7 +1518,7 @@ with tab_historial:
             
             if busqueda.lower() in pac_nom.lower():
                 nom_archivo_copia = normalizar_nombre_archivo(pac_nom)
-                with st.expander(f"👤 {pac_nom} | 🩺 {mod_nom} ({cups_cod}) | 📅 {fecha} | 👨‍⚕️️ {med_firm}"):
+                with st.expander(f"👤 {pac_nom} | 🩺 {mod_nom} ({cups_cod}) | 📅 {fecha} | 👨‍⚕️ {med_firm}"):
                     c_det1, c_det2, c_desc, c_del = st.columns([2.5, 2, 2, 1.5])
                     c_det1.write(f"**Procedimiento:** {cups_cod}\n**Hallazgo Clave:** {param_clv}")
                     c_det2.write(f"**Certificado Forense:**\n`{cod_ver}`")
