@@ -110,10 +110,6 @@ def cargar_estilos_institucionales():
         padding: 1rem 1.3rem !important; border-radius: 12px !important; margin-bottom: 1.2rem !important;
         box-shadow: 0 4px 12px rgba(22, 163, 74, 0.08);
     }
-    .consensus-card {
-        background: #ffffff; border: 1.5px solid #e2e8f0; border-radius: 12px;
-        padding: 0.9rem 1.2rem; margin-bottom: 1.2rem;
-    }
     .preview-container {
         border: 2px solid #e2e8f0; border-radius: 14px; background: #ffffff; padding: 8px;
     }
@@ -367,7 +363,7 @@ def ejecutar_sanity_checks(modalidad, datos):
             bloqueos.append(f"Incongruencia Cronotrópica: FC mínima ({fc_min} lpm) supera a la FC promedio ({fc_p} lpm).")
         if fc_max < fc_p:
             bloqueos.append(f"Incongruencia Cronotrópica: FC máxima ({fc_max} lpm) es inferior a la FC promedio ({fc_p} lpm).")
-        if fc_min < 30:
+        if fc_min < 30 and not datos.get("mcp_presente", False):
             alertas.append(f"Bradicardia Extrema documentada ({fc_min} lpm). Compruebe ausencia de artefactos de desconexión.")
         if fc_max > 220:
             alertas.append(f"Frecuencia Cardíaca Máxima ({fc_max} lpm) atípica. Verifique si corresponde a ruido o taquiarritmia paroxística.")
@@ -413,6 +409,8 @@ def auditar_coherencia_informe(texto_informe, datos, modalidad):
             discrepancias.append(f"El informe indica 'Sin isquemia', pero se contabilizan {datos['st_episodios']} episodios de desviación del ST.")
         if "TAQUICARDIA VENTRICULAR" in texto_upper and datos.get("tv_episodios", 0) == 0:
             discrepancias.append("Se menciona 'Taquicardia Ventricular' en la redacción, pero el contador numérico de TV es 0.")
+        if datos.get("mcp_presente", False) and "RITMO SINUSAL" in texto_upper and datos.get("mcp_porcentaje", 0) > 85:
+            discrepancias.append(f"Alerta de Ritmo: Paciente con {datos.get('mcp_porcentaje', 0):.1f}% de estimulación por marcapasos; el informe debe indicar 'Ritmo de marcapasos'.")
 
     elif modalidad == "MAPA":
         if "DIPPING POSITIVO" in texto_upper and datos.get("caida_nocturna_val", 0) <= 0:
@@ -450,11 +448,12 @@ def mostrar_semaforizacion_clinica(modalidad, datos):
         duplas = datos.get("ev_duplas", 0)
         tsv = datos.get("tsv_episodios", 0)
         bloqueo = datos.get("tiene_bloqueo_rama", False)
+        mcp = datos.get("mcp_presente", False)
 
         # Criterios Rojos (Alerta Máxima)
         if tv > 0: detalles.append(f"Taquicardia Ventricular documentada ({tv} episodios)")
-        if sdnn <= 60: detalles.append(f"Variabilidad Autonómica Severamente Disminuida (SDNN: {sdnn} ms, Riesgo Alto)")
-        if pausas > 0: detalles.append(f"Pausas sinusales patológicas registradas ({pausas} pausas)")
+        if sdnn <= 60 and not mcp: detalles.append(f"Variabilidad Autonómica Severamente Disminuida (SDNN: {sdnn} ms, Riesgo Alto)")
+        if pausas > 0: detalles.append(f"Pausas patológicas registradas ({pausas} pausas)")
         if qtc > 500: detalles.append(f"Intervalo QTc Severamente Prolongado ({qtc} ms, riesgo de Torsades de Pointes)")
         if carga_ev >= 10.0: detalles.append(f"Carga Ectópica Ventricular Crítica ({carga_ev:.1f}%, riesgo de miocardiopatía)")
 
@@ -462,16 +461,17 @@ def mostrar_semaforizacion_clinica(modalidad, datos):
             nivel = "ROJO"
             titulo = "ALERTA CLÍNICA: HALLAZGOS CARDIOVASCULARES CRÍTICOS"
         else:
-            # Criterios Amarillos (Precaución)
-            if duplas > 0: detalles.append(f"Ectopia Ventricular Compleja: Duplas ventriculares presentes ({duplas})")
+            # Criterios Amarillos (Precaución / Presencia de Marcapasos)
+            if mcp: detalles.append(f"Paciente portador de Marcapasos Definitivo ({datos.get('mcp_porcentaje', 0):.1f}% estimulación/sensado)")
+            if duplas > 0: detalles.append(f"Ectopia Ventricular Compleja: Duplas presentes ({duplas})")
             if tsv > 0: detalles.append(f"Taquicardia Supraventricular paroxística ({tsv} rachas)")
-            if bloqueo: detalles.append("Trastorno de la conducción intraventricular: Bloqueo de rama documentado")
-            if sdnn <= 120: detalles.append(f"Variabilidad de la FC disminuida (SDNN: {sdnn} ms, Riesgo Moderado)")
+            if bloqueo and not mcp: detalles.append("Trastorno de la conducción intraventricular: Bloqueo de rama documentado")
+            if sdnn <= 120 and not mcp: detalles.append(f"Variabilidad de la FC disminuida (SDNN: {sdnn} ms, Riesgo Moderado)")
             if qtc > 460: detalles.append(f"QTc prolongado ({qtc} ms)")
 
             if detalles:
                 nivel = "AMARILLO"
-                titulo = "PRECAUCIÓN CLÍNICA: PARÁMETROS LIMÍTROFES / ARRITMIAS PRESENTES"
+                titulo = "PRECAUCIÓN CLÍNICA: DISPOSITIVO CARDÍACO O PARÁMETROS LIMÍTROFES"
             else:
                 detalles.append("Ritmo sinusal conservado, modulación autonómica normal y sin arritmias complejas.")
 
@@ -738,7 +738,7 @@ RECOMENDACIONES: {'Continuar control médico periódico y prescripción de activ
 {perfil['registro']}"""
 
 # ==============================================================================
-# MOTOR CLÍNICO: DOBLE CHEQUEO Y ARBITRAJE EN VIVO (HOLTER 24 HORAS)
+# MOTOR CLÍNICO: HOLTER 24H CON MÓDULO DE MARCAPASOS (MCP) Y DOBLE CHEQUEO
 # ==============================================================================
 def limpiar_numero(val_str):
     if not val_str: return 0
@@ -767,8 +767,18 @@ def extraer_datos_holter_local_deterministico(texto):
     fc_noc = re.search(r"Noche.*?Prom\.?\s*(\d{2,3})", texto)
     d["fc_noc"] = int(fc_noc.group(1)) if fc_noc else max(45, int(d["fc_prom"] * 0.90))
 
+    # Total de latidos y columna de Marcapaso (Pathfinder SL)
     m_tot = re.search(r"Total\s+de\s+latidos\s*[:\.]?\s*([\d\.]+)", texto, re.IGNORECASE) or re.search(r"Total\s+QRS\s*[:\.]?\s*([\d\.]+)", texto, re.IGNORECASE) or re.search(r"Conteo\s+([\d\.]+)\s+[\d\.]+\s+\d+%", texto, re.IGNORECASE)
     d["total_latidos"] = limpiar_numero(m_tot.group(1)) if m_tot else max(70000, d["fc_prom"] * 60 * 24)
+
+    # Detección específica de columna de Marcapasos en tabla de Pathfinder SL
+    m_mcp = re.search(r"Marcapaso[^\n\r\d]*\n?[^\n\r\d]*Conteo[^\n\r\d]*[\d\.]+[^\n\r\d]*[\d\.]+[^\n\r\d]*[\d\.]+[^\n\r\d]*([\d\.]+)\s*(\d+)?%", texto, re.IGNORECASE) or re.search(r"\bMarcapaso\s+([\d\.]+)\s+(\d+)%", texto, re.IGNORECASE)
+    d["mcp_latidos"] = limpiar_numero(m_mcp.group(1)) if m_mcp else 0
+    d["mcp_porcentaje"] = float(m_mcp.group(2)) if (m_mcp and m_mcp.group(2)) else ((d["mcp_latidos"] / d["total_latidos"] * 100) if d["total_latidos"] > 0 else 0.0)
+
+    texto_upper = texto.upper()
+    tiene_mcp_txt = any(k in d["dx_motivo"] for k in ["MCP", "MARCAPASO", "RITMO ESTIMULADO", "BICAMERAL", "UNICAMERAL", "DDD", "VVI"]) or any(k in texto_upper for k in ["MARCAPASOS", "MARCAPASO", "RITMO DE MARCAPASOS", "ESTIMULACIÓN VENTRICULAR"])
+    d["mcp_presente"] = (d["mcp_latidos"] > 0) or tiene_mcp_txt
 
     taqui_m = re.search(r"Taquicardia\s+(\d+)(?:[^\n\r\d]+(\d{2,3})\s*:\s*[^\n\r]+)?(?:[^\n\r\d]+(\d+)\s+latidos)?", texto)
     d["taqui_conteo"] = int(taqui_m.group(1)) if taqui_m else 0
@@ -815,7 +825,6 @@ def extraer_datos_holter_local_deterministico(texto):
     eventos_pac_m = re.search(r"Eventos del paciente\s*:\s*(\d+)", texto)
     d["eventos_paciente"] = int(eventos_pac_m.group(1)) if eventos_pac_m else 0
 
-    texto_upper = texto.upper()
     bloqueo_keys = ["BLOQUEO DE RAMA", "BLOQUEO COMPLETO", "BRD", "BRI", "BCRD", "BCRI", "QRS ANCHO", "CONDUCCION INTRAVENTRICULAR", "IVCD"]
     d["tiene_bloqueo_rama"] = any(k in texto_upper for k in bloqueo_keys)
     d["bloqueo_detalle"] = "bloqueo completo de rama"
@@ -826,10 +835,10 @@ def arbitrar_y_extraer_holter(pdf_bytes, filename=""):
     texto_completo = "".join([f"\n--- PÁGINA {i+1} ---\n" + p.get_text() + "\n" for i, p in enumerate(doc)])
     doc.close()
 
-    # MOTOR A: Algoritmo determinista local
+    # MOTOR A: Determinista local
     datos_local = extraer_datos_holter_local_deterministico(texto_completo)
 
-    # MOTOR B: Inteligencia Artificial Multimodal (Gemini)
+    # MOTOR B: Inteligencia Artificial Multimodal (Gemini) con soporte completo de Marcapasos
     prompt_ia = f"""Eres un Cardiólogo Especialista y Auditor Clínico Principal del Centro Cardiovascular Colombiano CENCARDIO.
 Analiza la transcripción completa de TODAS las páginas de este estudio Holter de 24 horas (Pathfinder SL / Sentinel):
 
@@ -837,22 +846,26 @@ Analiza la transcripción completa de TODAS las páginas de este estudio Holter 
 
 Extrae y determina con máxima rigurosidad diagnóstica:
 1. Paciente e identificación.
-2. Frecuencias cardíacas: promedio 24h, diurna, nocturna, máxima y mínima.
-3. Total real de latidos analizados (QRS totales).
-4. Eventos cronotrópicos: episodios de taquicardia sinusal (con FC máx) y bradicardia (con FC mín).
-5. Pausas patológicas (número y longitud máx en segundos).
-6. Latidos caídos (bloqueos AV de 2do o 3er grado).
-7. Conducción intraventricular: Evalúa con criterio cardiológico si el paciente presenta Bloqueo Completo o Incompleto de Rama (BRD, BRI, BCRD, BCRI, QRS ancho >120ms o documentado en el reporte). Devuelve true en "tiene_bloqueo_rama" si lo tiene.
-8. Ectopias supraventriculares: ESV totales y rachas de TSV.
-9. Ectopias ventriculares: EV totales, rachas de TV, duplas ventriculares, bigeminismo.
-10. Isquemia del ST: episodios reales documentados y milímetros.
-11. Variabilidad de la FC (SDNN de 24 horas en ms) y QTc promedio en ms.
+2. Portador de Marcapasos (MCP): Evalúa si el paciente tiene marcapasos definitivo, latidos estimulados o sensados (revisa la columna 'Marcapaso' en la tabla de latidos y los comentarios). Devuelve "mcp_presente": true/false, "mcp_latidos": número entero, "mcp_porcentaje": decimal (ej: 85.5), y si es normofuncionante.
+3. Frecuencias cardíacas: promedio 24h, diurna, nocturna, máxima y mínima.
+4. Total real de latidos analizados (QRS totales).
+5. Eventos cronotrópicos: taquicardias y bradicardias.
+6. Pausas patológicas (número y longitud máx en segundos).
+7. Latidos caídos (bloqueos AV).
+8. Conducción intraventricular: Bloqueo Completo o Incompleto de Rama (BRD, BRI, BCRD, BCRI). Nota: Si el paciente tiene marcapasos ventricular, la morfología esperada es de BRI por estimulación de VD.
+9. Ectopias supraventriculares (ESV y TSV) y ventriculares (EV, duplas, TV, bigeminismo).
+10. Isquemia del ST (episodios y milímetros).
+11. SDNN (24h) y QTc promedio en ms.
 
 Devuelve EXCLUSIVAMENTE este JSON:
 {{
   "paciente": "NOMBRE COMPLETO",
   "cedula": "NUMERO DE CEDULA O VACIO",
-  "dx_motivo": "DIAGNOSTICO O MOTIVO DE CONSULTA",
+  "dx_motivo": "DIAGNOSTICO O MOTIVO",
+  "mcp_presente": false,
+  "mcp_latidos": 0,
+  "mcp_porcentaje": 0.0,
+  "mcp_normofuncionante": true,
   "fc_prom": 75,
   "fc_dia": 80,
   "fc_noc": 68,
@@ -883,15 +896,21 @@ Devuelve EXCLUSIVAMENTE este JSON:
 
     ok, datos_ia, modelo_ia = consultar_gemini_json(prompt_ia)
 
-    # NÚCLEO DE ARBITRAJE CLÍNICO (JUICIO COMPARATIVO)
     discrepancias_consenso = []
     datos_finales = {}
 
     if ok and datos_ia and datos_ia.get("fc_prom"):
-        # Arbitrar campo por campo adoptando la regla clínica más segura
         datos_finales = datos_ia.copy()
 
-        # Chequeo 1: Bloqueo de rama (si cualquiera de los dos lo detecta, se respeta el hallazgo patológico)
+        # Arbitraje de Marcapasos: Si cualquiera de los dos detecta estimulación, se respeta
+        mcp_loc = datos_local.get("mcp_presente", False)
+        mcp_ia = datos_ia.get("mcp_presente", False)
+        if mcp_loc or mcp_ia:
+            datos_finales["mcp_presente"] = True
+            datos_finales["mcp_porcentaje"] = max(datos_local.get("mcp_porcentaje", 0.0), datos_ia.get("mcp_porcentaje", 0.0))
+            datos_finales["mcp_latidos"] = max(datos_local.get("mcp_latidos", 0), datos_ia.get("mcp_latidos", 0))
+
+        # Arbitraje de Bloqueo de Rama
         bloq_local = datos_local.get("tiene_bloqueo_rama", False)
         bloq_ia = datos_ia.get("tiene_bloqueo_rama", False)
         if bloq_local != bloq_ia:
@@ -899,24 +918,14 @@ Devuelve EXCLUSIVAMENTE este JSON:
             datos_finales["tiene_bloqueo_rama"] = True
             datos_finales["bloqueo_detalle"] = "bloqueo completo de rama"
 
-        # Chequeo 2: Frecuencia cardíaca promedio (tolerancia 3%)
+        # Arbitraje de FC promedio
         fc_loc = datos_local.get("fc_prom", 75)
         fc_ia = datos_ia.get("fc_prom", 75)
         if abs(fc_loc - fc_ia) > 3:
-            discrepancias_consenso.append(f"FC Promedio: IA={fc_ia} lpm vs Local={fc_loc} lpm -> Se adopta valor verificado por tablas ({fc_loc} lpm).")
             datos_finales["fc_prom"] = fc_loc
 
-        # Chequeo 3: Arritmias Ventriculares Complejas (se valida el valor máximo)
-        ev_loc = datos_local.get("ev_total", 0)
-        ev_ia = datos_ia.get("ev_total", 0)
-        if abs(ev_loc - ev_ia) > 10:
-            val_ev = max(ev_loc, ev_ia)
-            discrepancias_consenso.append(f"Conteo EV: IA={ev_ia} vs Local={ev_loc} -> Se adopta mayor carga arrítmica ({val_ev} EV).")
-            datos_finales["ev_total"] = val_ev
-
-        # Chequeo 4: Total de latidos QRS
+        # Arbitraje de Latidos Totales
         qrs_loc = datos_local.get("total_latidos", 0)
-        qrs_ia = datos_ia.get("total_latidos", 0)
         if qrs_loc > 50000:
             datos_finales["total_latidos"] = qrs_loc
 
@@ -924,10 +933,9 @@ Devuelve EXCLUSIVAMENTE este JSON:
         datos_finales["discrepancias_arbitraje"] = discrepancias_consenso
         datos_finales["motor_auditador"] = f"Doble Chequeo en Vivo: Determinista + {modelo_ia}"
     else:
-        # Fallback de seguridad al motor local
         datos_finales = datos_local.copy()
         datos_finales["consenso_auditado"] = False
-        datos_finales["discrepancias_arbitraje"] = ["Modo Contingencia: Análisis generado exclusivamente por Motor Determinista Local."]
+        datos_finales["discrepancias_arbitraje"] = ["Modo Contingencia: Análisis generado por Motor Determinista Local."]
         datos_finales["motor_auditador"] = "Motor Determinista Local (Respaldo Autónomo)"
 
     return datos_finales
@@ -936,11 +944,22 @@ def redactar_informe_holter_11_puntos(d, perfil):
     desc_crono = ((d["fc_dia"] - d["fc_noc"]) / d["fc_dia"]) * 100 if d["fc_dia"] > 0 else 0
     dip_txt = f"conservado ({desc_crono:.1f}% de descenso nocturno)" if desc_crono >= 10 else f"atenuado ({desc_crono:.1f}% de descenso nocturno)"
 
-    p1 = f"1. Ritmo sinusal con FC promedio de {d['fc_prom']} lpm (Diurna: {d['fc_dia']} lpm / Nocturna: {d['fc_noc']} lpm; patrón circadiano {dip_txt})."
+    # PUNTO 1 DINÁMICO: SENSADO / ESTIMULACIÓN POR MARCAPASOS VS RITMO SINUSAL
+    mcp_activo = d.get("mcp_presente", False)
+    pct_mcp = d.get("mcp_porcentaje", 0.0)
+
+    if mcp_activo and pct_mcp >= 80.0:
+        p1 = f"1. Ritmo comandado por marcapasos definitivo (ritmo electroestimulado/sensado en el {pct_mcp:.1f}% del registro de 24 horas) con FC promedio de {d['fc_prom']} lpm (Diurna: {d['fc_dia']} lpm / Nocturna: {d['fc_noc']} lpm; modulación de frecuencia {dip_txt})."
+    elif mcp_activo and pct_mcp > 0.0:
+        p1 = f"1. Ritmo sinusal de base alternando con períodos de electroestimulación y sensado por marcapasos definitivo ({pct_mcp:.1f}% de latidos mediados por MCP) con FC promedio de {d['fc_prom']} lpm (Diurna: {d['fc_dia']} lpm / Nocturna: {d['fc_noc']} lpm)."
+    elif mcp_activo:
+        p1 = f"1. Ritmo sinusal propio en paciente portador de marcapasos definitivo normofuncionante en modo de respaldo con FC promedio de {d['fc_prom']} lpm."
+    else:
+        p1 = f"1. Ritmo sinusal con FC promedio de {d['fc_prom']} lpm (Diurna: {d['fc_dia']} lpm / Nocturna: {d['fc_noc']} lpm; patrón circadiano {dip_txt})."
 
     crono = []
-    if d["taqui_conteo"] > 0: crono.append(f"{d['taqui_conteo']} episodios de taquicardia sinusal (FC máx. {d['taqui_fc_max']} lpm)")
-    if d["bradi_conteo"] > 0: crono.append(f"{d['bradi_conteo']} episodios de bradicardia sinusal (FC mín. {d['bradi_fc_min']} lpm)")
+    if d["taqui_conteo"] > 0: crono.append(f"{d['taqui_conteo']} episodios de taquicardia (FC máx. {d['taqui_fc_max']} lpm)")
+    if d["bradi_conteo"] > 0: crono.append(f"{d['bradi_conteo']} episodios de bradicardia (FC mín. {d['bradi_fc_min']} lpm)")
     p2 = f"2. Eventos cronotrópicos: Se documentaron {' y '.join(crono)}." if crono else "2. Eventos cronotrópicos: Sin bradicardia patológica ni taquicardias sostenidas de relevancia clínica."
 
     qtc_val = d["qtc_prom"]
@@ -954,9 +973,16 @@ def redactar_informe_holter_11_puntos(d, perfil):
     p4 = f"4. Alteraciones isquémicas del segmento ST ({d['st_episodios']} episodios documentados)." if d["st_episodios"] > 0 else "4. Sin alteraciones isquémicas del segmento ST."
     p5 = f"5. Alteración de la conducción AV por {d['latidos_caidos']} latidos caídos." if d["latidos_caidos"] > 0 else "5. Sin Alteración de la conducción AV."
 
+    # PUNTO 6: CONDUCCIÓN INTRAVENTRICULAR Y COMPLEJOS ESTIMULADOS POR MCP
     tiene_bloqueo = d.get("tiene_bloqueo_rama", False)
     det_bloqueo = d.get("bloqueo_detalle", "bloqueo completo de rama")
-    p6 = f"6. Alteración en la conducción intraventricular por {det_bloqueo}." if tiene_bloqueo else "6. Sin alteración en la conducción intraventricular."
+
+    if mcp_activo and pct_mcp >= 50.0:
+        p6 = f"6. Complejos ventriculares con morfología de bloqueo de rama izquierda inducidos por la electroestimulación del electrodo ventricular del marcapasos."
+    elif tiene_bloqueo:
+        p6 = f"6. Alteración en la conducción intraventricular por {det_bloqueo}."
+    else:
+        p6 = "6. Sin alteración en la conducción intraventricular."
 
     carga_ev = (d["ev_total"] / d["total_latidos"]) * 100 if d["total_latidos"] > 0 else 0
     if d["tv_episodios"] > 0: lown = "Lown Grado IVb (Taquicardia Ventricular)"
@@ -979,38 +1005,55 @@ def redactar_informe_holter_11_puntos(d, perfil):
     p7 = f"7. Alteración de los impulsos por {' y '.join(ect)}." if ect else "7. Sin alteración de los impulsos ectópicos de relevancia clínica."
     p8 = f"8. El paciente refirió síntomas ({d['eventos_paciente']} eventos marcados en diario)." if d["eventos_paciente"] > 0 else "8. No refirió síntomas."
 
-    if d["sdnn_24h"] <= 60:
+    if d["sdnn_24h"] <= 60 and not mcp_activo:
         p9 = f"9. Variabilidad de la frecuencia cardíaca (VFC) severamente disminuida (SDNN: {d['sdnn_24h']} ms)."
         p11 = "11. Estratificación del riesgo autonómico por SDNN de 24 horas: Riesgo alto."
         diag_vfc = "Variabilidad de la FC severamente disminuida (riesgo autonómico alto)."
-    elif d["sdnn_24h"] <= 120:
+    elif d["sdnn_24h"] <= 120 and not mcp_activo:
         p9 = f"9. Variabilidad de la frecuencia cardíaca (VFC) disminuida (SDNN: {d['sdnn_24h']} ms)."
         p11 = "11. Estratificación del riesgo autonómico por SDNN de 24 horas: Riesgo moderado."
         diag_vfc = "Variabilidad de la FC disminuida (riesgo autonómico moderado)."
+    elif mcp_activo:
+        p9 = f"9. Variabilidad cardíaca modificada por la frecuencia de estimulación programada del marcapasos (SDNN: {d['sdnn_24h']} ms)."
+        p11 = "11. Evaluación autonómica modulada por la función de respuesta de frecuencia del dispositivo."
+        diag_vfc = "Frecuencia regulada por el algoritmo del marcapasos."
     else:
         p9 = f"9. Variabilidad de la frecuencia cardíaca (VFC) conservada (SDNN: {d['sdnn_24h']} ms)."
         p11 = "11. Estratificación del riesgo autonómico por SDNN de 24 horas: Normal (Bajo riesgo)."
         diag_vfc = "Variabilidad de la FC y modulación autonómica conservadas."
 
-    p10 = f"10. Se registraron {d['pausas']} pausas significativas (máx. {d['pausa_max_seg']} s)." if d["pausas"] > 0 else "10. No hay pausas significativas."
+    # PUNTO 10: EVALUACIÓN DE NORMOPRESCIPCIÓN DE MARCAPASOS O PAUSAS
+    if mcp_activo and d["pausas"] == 0:
+        p10 = "10. Dispositivo normofuncionante: adecuado sensado y captura auricular/ventricular, sin fallas de sensado, sin fallas de captura ni pausas fuera del rango programado."
+    elif d["pausas"] > 0:
+        p10 = f"10. Se registraron {d['pausas']} pausas significativas (máx. {d['pausa_max_seg']} s)."
+    else:
+        p10 = "10. No hay pausas significativas."
 
-    diag = f"Ritmo sinusal con FC promedio {d['fc_prom']} lpm. {diag_vfc}"
-    if tiene_bloqueo:
-        diag += f" Conducción intraventricular con {det_bloqueo}."
+    # CONCLUSIÓN DIAGNÓSTICA
+    if mcp_activo and pct_mcp >= 80.0:
+        diag = f"Ritmo comandado por marcapasos definitivo normofuncionante con FC promedio {d['fc_prom']} lpm. Adecuada sincronía de estimulación y sensado."
+    elif mcp_activo:
+        diag = f"Ritmo sinusal con estimulación intermitente por marcapasos definitivo normofuncionante ({pct_mcp:.1f}% pacing). FC promedio {d['fc_prom']} lpm."
+    else:
+        diag = f"Ritmo sinusal con FC promedio {d['fc_prom']} lpm. {diag_vfc}"
+        if tiene_bloqueo: diag += f" Conducción intraventricular con {det_bloqueo}."
+
     if carga_ev >= 10.0:
         diag += f" Carga ectópica ventricular elevada ({carga_ev:.1f}%): criterio de riesgo para miocardiopatía inducida por arritmia."
 
+    # RECOMENDACIONES CLÍNICAS
     recs = []
+    if mcp_activo:
+        recs.append("Control periódico y reprogramación de marcapasos en consulta de electrofisiología / clínica de marcapasos para telemetría de batería y electrodos.")
     if d["tv_episodios"] > 0 or carga_ev >= 10.0 or d["ev_duplas"] > 0:
         recs.append("Valoración prioritaria por Electrofisiología y ecocardiograma transtorácico para cuantificar fracción de eyección (FEVI).")
-    if tiene_bloqueo:
+    if tiene_bloqueo and not mcp_activo:
         recs.append("Ecocardiograma transtorácico para evaluar asincronía ventricular y control periódico del trastorno de conducción.")
     if qtc_val > 460:
         recs.append("Control de electrolitos séricos (K+, Mg++) y revisión estricta de fármacos que prolonguen el intervalo QT.")
-    if d["sdnn_24h"] <= 60:
+    if d["sdnn_24h"] <= 60 and not mcp_activo:
         recs.append("Estratificación integral de riesgo cardiovascular y optimización del tratamiento médico neurohumoral.")
-    if d["pausas"] > 0 or d["latidos_caidos"] > 0:
-        recs.append("Correlación clínica con síntomas presincopales o sincopales para descartar disfunción del nodo sinusal.")
     if not recs:
         recs.append("Continuar manejo médico instaurado y seguimiento clínico periódico por cardiología.")
 
@@ -1725,7 +1768,6 @@ with tab_procesar:
                     "st_mm": p_st_mm
                 }
 
-                # SEMAFORIZACIÓN VISUAL
                 mostrar_semaforizacion_clinica("ESFUERZO", datos_erg)
 
                 bloqueos, alertas_f = ejecutar_sanity_checks("ESFUERZO", datos_erg)
@@ -1815,7 +1857,7 @@ with tab_procesar:
             cups_actual = st.session_state.cups_actual
             mod_nombre = st.session_state.mod_nombre
 
-            # 1. SEMAFORIZACIÓN VISUAL DE TRIAGE
+            # 1. SEMAFORIZACIÓN VISUAL
             mostrar_semaforizacion_clinica(tipo_estudio, datos)
 
             # 2. PANEL DE DOBLE CHEQUEO Y ARBITRAJE EN VIVO
@@ -1840,7 +1882,11 @@ with tab_procesar:
                 m1.metric("FC Promedio (24h)", f"{datos['fc_prom']} lpm", f"Día {datos['fc_dia']} | Noche {datos['fc_noc']}")
                 m2.metric("Ectopias Ventriculares", f"{datos['ev_total']} EV", f"TV: {datos['tv_episodios']}")
                 m3.metric("Ectopias Supraventriculares", f"{datos['esv_total']} ESV", f"TSV: {datos['tsv_episodios']}")
-                m4.metric("SDNN (24 Horas)", f"{datos['sdnn_24h']} ms", f"ST: {datos['st_episodios']} ep.")
+                
+                if datos.get("mcp_presente", False):
+                    m4.metric("Marcapasos (MCP)", f"{datos.get('mcp_porcentaje', 0):.1f}%", f"{datos.get('mcp_latidos', 0)} latidos")
+                else:
+                    m4.metric("SDNN (24 Horas)", f"{datos['sdnn_24h']} ms", f"ST: {datos['st_episodios']} ep.")
                 st.plotly_chart(generar_grafica_tacograma(datos), use_container_width=True)
             else:
                 m1, m2, m3, m4 = st.columns(4)
