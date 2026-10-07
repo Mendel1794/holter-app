@@ -54,7 +54,7 @@ st.set_page_config(
 )
 
 # ==============================================================================
-# GESTIÓN DE LOGOTIPO INSTITUCIONAL (CORREGIDO)
+# GESTIÓN DE LOGOTIPO INSTITUCIONAL
 # ==============================================================================
 @st.cache_data
 def obtener_logo_b64():
@@ -65,6 +65,68 @@ def obtener_logo_b64():
             mime = "png" if nom.endswith(".png") else "jpeg"
             return f"data:image/{mime};base64,{b64}"
     return None
+
+def cargar_estilos_institucionales():
+    return """
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap');
+    html, body, [class*="css"] { font-family: 'Plus Jakarta Sans', sans-serif !important; color: #1e293b; }
+    .stApp { background-color: #f8fafc; }
+    header[data-testid="stHeader"] { background: transparent !important; }
+    .block-container { padding-top: 1.2rem !important; padding-bottom: 2.5rem !important; }
+
+    .top-hospital-bar {
+        background: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px;
+        padding: 1rem 1.6rem; display: flex; align-items: center; justify-content: space-between;
+        box-shadow: 0 4px 20px -2px rgba(10, 37, 64, 0.04); margin-bottom: 1.5rem;
+    }
+    .inst-badge-primary {
+        background: #e0f2fe; color: #0369a1; font-size: 0.72rem; font-weight: 700;
+        padding: 4px 10px; border-radius: 20px; text-transform: uppercase; border: 1px solid #bae6fd;
+    }
+    .inst-badge-success {
+        background: #ecfdf5; color: #065f46; font-size: 0.72rem; font-weight: 700;
+        padding: 4px 10px; border-radius: 20px; text-transform: uppercase; border: 1px solid #a7f3d0;
+    }
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px; background: #ffffff; padding: 6px; border-radius: 12px;
+        border: 1px solid #e2e8f0; margin-bottom: 1.2rem;
+    }
+    .stTabs [data-baseweb="tab"] {
+        border-radius: 8px !important; padding: 9px 22px !important;
+        font-weight: 700 !important; font-size: 0.88rem !important; color: #64748b !important;
+    }
+    .stTabs [aria-selected="true"] {
+        background-color: #0a2540 !important; color: #ffffff !important;
+    }
+    .specialist-card {
+        background: linear-gradient(135deg, #0a2540 0%, #133863 100%);
+        border-radius: 14px; padding: 1.1rem; color: #ffffff; margin-bottom: 1.2rem;
+    }
+    .triage-rojo {
+        background: #fef2f2 !important; border-left: 6px solid #dc2626 !important; color: #991b1b !important;
+        padding: 1rem 1.3rem !important; border-radius: 12px !important; margin-bottom: 1.2rem !important;
+    }
+    .triage-amarillo {
+        background: #fffbeb !important; border-left: 6px solid #d97706 !important; color: #92400e !important;
+        padding: 1rem 1.3rem !important; border-radius: 12px !important; margin-bottom: 1.2rem !important;
+    }
+    .triage-verde {
+        background: #f0fdf4 !important; border-left: 6px solid #16a34a !important; color: #166534 !important;
+        padding: 1rem 1.3rem !important; border-radius: 12px !important; margin-bottom: 1.2rem !important;
+    }
+    .preview-container {
+        border: 2px solid #e2e8f0; border-radius: 14px; background: #ffffff; padding: 8px;
+    }
+    .cencardio-card {
+        background: #ffffff; border: 1px solid #e2e8f0; border-radius: 20px;
+        padding: 2.6rem 2.8rem; box-shadow: 0 20px 40px -12px rgba(10, 37, 64, 0.12);
+        max-width: 480px; margin: 3rem auto; text-align: center;
+    }
+    </style>
+    """
+
+st.markdown(cargar_estilos_institucionales(), unsafe_allow_html=True)
 
 # ==============================================================================
 # CONECTOR DE NUBE PERSISTENTE: SUPABASE & FALLBACK SQLITE
@@ -291,7 +353,7 @@ def buscar_telefono_servicio(cedula):
     return res[0] if res else ""
 
 # ==============================================================================
-# AUDITORÍA 1: SANITY CHECKS FISIOLÓGICOS (CANDADOS MATEMÁTICOS)
+# CANDADOS FISIOLÓGICOS Y AUDITOR DE COHERENCIA CLÍNICA
 # ==============================================================================
 def ejecutar_sanity_checks(modalidad, datos):
     alertas = []
@@ -303,13 +365,13 @@ def ejecutar_sanity_checks(modalidad, datos):
         fc_max = datos.get("fc_max", 100)
         
         if fc_min > fc_p:
-            bloqueos.append(f"Incongruencia Cronotrópica: FC mínima ({fc_min} lpm) no puede superar la FC promedio ({fc_p} lpm).")
+            bloqueos.append(f"Incongruencia Cronotrópica: FC mínima ({fc_min} lpm) supera a la FC promedio ({fc_p} lpm).")
         if fc_max < fc_p:
-            bloqueos.append(f"Incongruencia Cronotrópica: FC máxima ({fc_max} lpm) no puede ser inferior a la FC promedio ({fc_p} lpm).")
+            bloqueos.append(f"Incongruencia Cronotrópica: FC máxima ({fc_max} lpm) es inferior a la FC promedio ({fc_p} lpm).")
         if fc_min < 30:
-            alertas.append(f"Bradicardia Extrema documentada ({fc_min} lpm). Compruebe ausencia de artefactos de desconexión.")
+            alertas.append(f"Bradicardia Extrema detectada ({fc_min} lpm). Descarte artefacto.")
         if fc_max > 220:
-            alertas.append(f"Frecuencia Cardíaca Máxima ({fc_max} lpm) atípica. Verifique si corresponde a ruido o taquiarritmia paroxística.")
+            alertas.append(f"FC Máxima no fisiológica ({fc_max} lpm). Descarte ruido de señal.")
 
     elif modalidad == "MAPA":
         pas = datos.get("pas_24h", 120)
@@ -317,11 +379,11 @@ def ejecutar_sanity_checks(modalidad, datos):
         cn = datos.get("caida_nocturna_val", 10.0)
 
         if pad >= pas:
-            bloqueos.append(f"Error Hemodinámico Severo: La Presión Diastólica ({pad} mmHg) es igual o mayor a la Sistólica ({pas} mmHg).")
+            bloqueos.append(f"Error Hemodinámico: La PAD ({pad} mmHg) es mayor o igual a la PAS ({pas} mmHg).")
         if (pas - pad) < 20:
-            alertas.append(f"Presión de Pulso patológicamente estrecha ({pas - pad} mmHg). Revise calibración.")
+            alertas.append(f"Presión de Pulso patológicamente estrecha ({pas - pad} mmHg).")
         if cn < -20.0:
-            alertas.append(f"Patrón Riser Extremo (Aumento nocturno de presión: {cn:.1f}%). Riesgo cerebrovascular inminente.")
+            alertas.append(f"Patrón Riser Severo (Aumento nocturno: {cn:.1f}%). Alto riesgo cerebrovascular.")
 
     elif modalidad == "ESFUERZO":
         edad = datos.get("edad", 35)
@@ -331,43 +393,40 @@ def ejecutar_sanity_checks(modalidad, datos):
         pad_pico = datos.get("pad_pico", 90)
 
         if pad_pico >= pas_pico:
-            bloqueos.append(f"Incongruencia en Esfuerzo: PAD pico ({pad_pico} mmHg) no puede superar la PAS pico ({pas_pico} mmHg).")
+            bloqueos.append(f"Incongruencia en Esfuerzo: PAD pico ({pad_pico} mmHg) no puede superar a PAS ({pas_pico} mmHg).")
         if fc_basal >= fc_pico and fc_pico > 0:
-            alertas.append("Respuesta Cronotrópica Paradójica: La FC pico es inferior o igual a la frecuencia basal de reposo.")
+            alertas.append("Respuesta Cronotrópica Paradójica: FC pico es menor o igual a FC basal.")
         fcm_prev = 220 - edad if edad > 0 else 200
         if fc_pico > (fcm_prev * 1.25):
-            alertas.append(f"FC Pico ({fc_pico} lpm) excede el 125% de la FCM máxima ({fcm_prev} lpm). Sospecha de taquicardia supraventricular o error de lectura.")
+            alertas.append(f"FC Pico ({fc_pico} lpm) excede el 125% de la FCM máxima ({fcm_prev} lpm).")
 
     return bloqueos, alertas
 
-# ==============================================================================
-# AUDITORÍA 2: CLINICAL LINTER (COHERENCIA CUANTITATIVA VS TEXTO)
-# ==============================================================================
 def auditar_coherencia_informe(texto_informe, datos, modalidad):
     discrepancias = []
     texto_upper = texto_informe.upper()
 
     if modalidad == "HOLTER":
         if "SIN ALTERACIONES ISQUÉMICAS" in texto_upper and datos.get("st_episodios", 0) > 0:
-            discrepancias.append(f"El informe indica 'Sin isquemia', pero se contabilizan {datos['st_episodios']} episodios de desviación del ST.")
+            discrepancias.append(f"Texto indica 'Sin isquemia', pero se registraron {datos['st_episodios']} episodios de ST.")
         if "TAQUICARDIA VENTRICULAR" in texto_upper and datos.get("tv_episodios", 0) == 0:
-            discrepancias.append("Se menciona 'Taquicardia Ventricular' en la redacción, pero el contador numérico de TV es 0.")
+            discrepancias.append("Se menciona 'Taquicardia Ventricular', pero la métrica cuantitativa de TV es 0.")
 
     elif modalidad == "MAPA":
         if "DIPPING POSITIVO" in texto_upper and datos.get("caida_nocturna_val", 0) <= 0:
-            discrepancias.append(f"El texto dictamina 'Dipping Positivo', pero el cálculo matemático de descenso nocturno es {datos.get('caida_nocturna_val', 0):.1f}%.")
+            discrepancias.append(f"Se dictamina 'Dipping Positivo', pero la caída nocturna calculada es {datos.get('caida_nocturna_val', 0):.1f}%.")
         if "CONTROL ÓPTIMO" in texto_upper and (datos.get("pas_24h", 0) >= 140 or float(str(datos.get("carga_pas", "0")).replace(",", ".")) > 30):
-            discrepancias.append("Se califica 'Control Óptimo', pero los promedios o cargas tensionales superan el rango de normalidad.")
+            discrepancias.append("Se califica 'Control Óptimo', pero el paciente presenta cifras elevadas.")
 
     elif modalidad == "ESFUERZO":
         st_mm = datos.get("st_mm", 0.0)
         if "NEGATIVA PARA ISQUEMIA" in texto_upper and st_mm >= 1.0:
-            discrepancias.append(f"Se dictamina prueba 'Negativa para isquemia', pero existe infradesnivel significativo del ST de {st_mm} mm.")
+            discrepancias.append(f"Se concluye 'Prueba Negativa', pero hay infradesnivel significativo del ST de {st_mm} mm.")
         if "SUFICIENTE" in texto_upper:
             fcm_prev = 220 - datos.get("edad", 35)
             porc = (datos.get("fc_pico", 0) / fcm_prev) * 100 if fcm_prev > 0 else 0
             if porc < 85:
-                discrepancias.append(f"Se describe 'Prueba Suficiente', pero el esfuerzo solo alcanzó el {porc:.1f}% de la frecuencia submáxima prevista (meta ≥ 85%).")
+                discrepancias.append(f"Se describe 'Prueba Suficiente', pero solo alcanzó el {porc:.1f}% de la meta submáxima (≥ 85%).")
 
     return discrepancias
 
@@ -392,16 +451,16 @@ def extraer_datos_esfuerzo_multimodal(archivos_fotos):
             partes_contenido = [
                 {
                     "text": """Eres un Cardiólogo especialista en Ergometría computarizada.
-Analiza las fotografías adjuntas de la tirilla de esfuerzo continuo y notas de enfermería/post-its (incluso si están inclinadas, arrugadas o con caligrafía manual).
+Analiza las fotografías adjuntas de la tirilla de esfuerzo continuo y notas de enfermería/post-its.
 Extrae con rigor absoluto los siguientes campos y devuélvelos EXCLUSIVAMENTE en formato JSON plano:
 {
-  "paciente": "Nombre completo del paciente o cadena vacía si no es visible",
+  "paciente": "Nombre completo del paciente o cadena vacía",
   "cedula": "Número de documento o PID o cadena vacía",
   "edad": número entero de años o 35 si no aparece,
   "sexo": "Femenino" o "Masculino",
   "protocolo": "Bruce",
   "etapa": "Etapa alcanzada, ej: Etapa 4 o Etapa 6",
-  "tiempo_min": tiempo total del ejercicio en minutos como decimal (ej: si dice 16:14 convierte a 16.23, si dice 12:30 convierte a 12.5),
+  "tiempo_min": tiempo total del ejercicio en minutos como decimal (ej: 16:14 convierte a 16.23, 12:30 a 12.5),
   "fc_basal": FC basal de reposo en lpm,
   "fc_pico": FC máxima alcanzada en esfuerzo en lpm,
   "pas_basal": PAS de reposo en mmHg,
@@ -474,7 +533,7 @@ No agregues comentarios ni markdown, únicamente el JSON puro."""
     return datos
 
 # ==============================================================================
-# FÓRMULAS FISIOLÓGICAS DE ERGOMETRÍA Y PRUEBA DE ESFUERZO (BRUCE CONTINUO)
+# FÓRMULAS FISIOLÓGICAS DE ESFUERZO (BRUCE CONTINUO)
 # ==============================================================================
 def calcular_mets_bruce(tiempo_min):
     if tiempo_min <= 0.1:
@@ -524,7 +583,7 @@ RECOMENDACIONES: {'Continuar manejo médico integral y prescripción de activida
 {perfil['registro']}"""
 
 # ==============================================================================
-# MOTOR CLÍNICO: HOLTER ECG 24 HORAS CON CARGA ARRÍTMICA & LOWN
+# MOTOR CLÍNICO: HOLTER ECG 24 HORAS (% BURDEN Y ESCALA DE LOWN)
 # ==============================================================================
 def limpiar_numero(val_str):
     if not val_str:
@@ -754,10 +813,516 @@ Hallazgos:
 {perfil['especialidad']}
 {perfil['registro']}"""
 
-# ==========================================
-# GESTIÓN DEL ENTORNO DE OPERACIÓN
-# ==========================================
-# Cabecera Superior
+# ==============================================================================
+# INYECTORES DE PDFS CON CUSTODIA FORENSE QR Y SELLO DIGITAL
+# ==============================================================================
+@st.cache_data
+def generar_qr_verificacion(paciente, medico, fecha_str, codigo_uuid, proc_nombre="CUPS 895001"):
+    url_base = "https://holtercencardio.streamlit.app/"
+    query_string = urllib.parse.urlencode({
+        "val": codigo_uuid[:12],
+        "pac": paciente,
+        "med": medico,
+        "fec": fecha_str,
+        "proc": proc_nombre
+    })
+    url_completa = f"{url_base}?{query_string}"
+
+    qr = qrcode.QRCode(version=1, error_correction=qrcode.constants.ERROR_CORRECT_M, box_size=4, border=1)
+    qr.add_data(url_completa)
+    qr.make(fit=True)
+    img_qr = qr.make_image(fill_color="#0a2540", back_color="white")
+    
+    buf = io.BytesIO()
+    img_qr.save(buf, format="PNG")
+    return buf.getvalue()
+
+@st.cache_data
+def procesar_firma_transparente():
+    posibles_archivos = ["OR WILIAM ANDA RAMIREZ.pdf", "firma_amaya.pdf", "firma_amaya.png"]
+    archivo_encontrado = next((n for n in posibles_archivos if os.path.exists(n)), None)
+    if not archivo_encontrado:
+        return None
+
+    try:
+        if archivo_encontrado.lower().endswith(".pdf"):
+            doc_firma = fitz.open(archivo_encontrado)
+            pix = doc_firma[0].get_pixmap(dpi=200)
+            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            doc_firma.close()
+        else:
+            img = Image.open(archivo_encontrado).convert("RGB")
+
+        img_gray = img.convert("L")
+        alpha = img_gray.point(lambda p: 255 if p < 185 else 0, mode='L')
+        tinta = Image.new("RGBA", img.size, (10, 37, 64, 255))
+        tinta.putalpha(alpha)
+
+        caja = tinta.getbbox()
+        if caja:
+            tinta = tinta.crop(caja)
+
+        buf = io.BytesIO()
+        tinta.save(buf, format="PNG")
+        return buf.getvalue()
+    except Exception:
+        return None
+
+def normalizar_nombre_archivo(nombre):
+    limpio = re.sub(r'[^A-Za-z0-9ÁÉÍÓÚáéíóúÑñ\s]', ' ', nombre)
+    return re.sub(r'\s+', '_', limpio).strip('_') or "PACIENTE"
+
+def inyectar_holter_pdf(pdf_bytes, texto_informe, paciente_nom, perfil, cod_uuid, estampador_activo=False):
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    pagina1 = doc[0]
+    rects_h = pagina1.search_for("Hallazgos:")
+    rects_f = pagina1.search_for("Firma del médico") or pagina1.search_for("Firma del operador")
+
+    y_base = rects_f[0].y0 if rects_f else 740
+    y0 = (rects_h[0].y1 + 4) if rects_h else 545
+    y1 = y_base - 62
+
+    pagina1.draw_rect(fitz.Rect(0, y0, pagina1.rect.width, y1), color=None, fill=(1, 1, 1), overlay=True)
+
+    font_size_optimo = 5.6
+    for fs in [6.2, 5.9, 5.6, 5.3, 5.0, 4.7, 4.4, 4.2]:
+        dt = fitz.open(stream=pdf_bytes, filetype="pdf")
+        rc = dt[0].insert_textbox(fitz.Rect(35, y0, pagina1.rect.width - 36, y1), texto_informe, fontsize=fs, fontname="helv", align=fitz.TEXT_ALIGN_LEFT)
+        dt.close()
+        if rc >= 0:
+            font_size_optimo = fs
+            break
+
+    pagina1.insert_textbox(fitz.Rect(35, y0, pagina1.rect.width - 36, y1), texto_informe, fontsize=font_size_optimo, fontname="helv", color=(0, 0, 0), align=fitz.TEXT_ALIGN_LEFT)
+
+    pagina1.draw_rect(fitz.Rect(220, y_base - 58, pagina1.rect.width, y_base + 12), color=None, fill=(1, 1, 1), overlay=True)
+    qr_bytes = generar_qr_verificacion(paciente_nom, perfil['nombre_completo'], ahora_colombia().strftime("%Y-%m-%d"), cod_uuid, "CUPS 895001")
+    pagina1.insert_image(fitz.Rect(230, y_base - 32, 270, y_base + 8), stream=qr_bytes)
+    pagina1.insert_text(fitz.Point(275, y_base - 18), "Validado Digitalmente", fontsize=5.2, fontname="helv", color=(0.08, 0.2, 0.36))
+    pagina1.insert_text(fitz.Point(275, y_base - 9), "Res. 3100 de 2019 - MinSalud", fontsize=4.7, fontname="helv", color=(0.25, 0.25, 0.25))
+    pagina1.insert_text(fitz.Point(275, y_base), f"Cód: {cod_uuid[:12]}...", fontsize=4.5, fontname="helv", color=(0.4, 0.4, 0.4))
+
+    firma_bytes = procesar_firma_transparente()
+    if firma_bytes and estampador_activo:
+        fx0 = (rects_f[0].x0 + 10) if rects_f else 380
+        pagina1.insert_image(fitz.Rect(fx0, y_base - 58, fx0 + 155, y_base + 4), stream=firma_bytes)
+
+    pix = pagina1.get_pixmap(dpi=130)
+    img_prev = pix.tobytes("png")
+    pdf_out = doc.tobytes()
+    doc.close()
+    return pdf_out, img_prev
+
+def inyectar_mapa_pdf(pdf_bytes, texto_informe, paciente_nom, perfil, cod_uuid, estampador_activo=False):
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    pagina1 = doc[0]
+    rect_m = pagina1.search_for("Presión arterial por la mañana")
+    rect_r = pagina1.search_for("Resumen de todo el registro")
+
+    y0 = (rect_m[0].y1 + 2) if rect_m else 230
+    y1 = (rect_r[0].y0 - 4) if rect_r else 425
+
+    pagina1.draw_rect(fitz.Rect(0, y0, pagina1.rect.width, y1), color=None, fill=(1, 1, 1), overlay=True)
+
+    font_size = 6.4
+    for fs in [7.2, 6.8, 6.4, 6.0, 5.6]:
+        dt = fitz.open(stream=pdf_bytes, filetype="pdf")
+        rc = dt[0].insert_textbox(fitz.Rect(36, y0 + 2, 440, y1 - 2), texto_informe, fontsize=fs, fontname="helv", align=fitz.TEXT_ALIGN_LEFT)
+        dt.close()
+        if rc >= 0:
+            font_size = fs
+            break
+
+    pagina1.insert_textbox(fitz.Rect(36, y0 + 2, 440, y1 - 2), texto_informe, fontsize=font_size, fontname="helv", color=(0, 0, 0), align=fitz.TEXT_ALIGN_LEFT)
+
+    qr_bytes = generar_qr_verificacion(paciente_nom, perfil['nombre_completo'], ahora_colombia().strftime("%Y-%m-%d"), cod_uuid, "CUPS 895003")
+    pagina1.insert_image(fitz.Rect(455, y0 + 6, 505, y0 + 56), stream=qr_bytes)
+    pagina1.insert_text(fitz.Point(510, y0 + 22), "Validado Digitalmente", fontsize=5.0, fontname="helv", color=(0.04, 0.15, 0.25))
+    pagina1.insert_text(fitz.Point(510, y0 + 32), "Res. 3100 MinSalud", fontsize=4.6, fontname="helv", color=(0.3, 0.3, 0.3))
+    pagina1.insert_text(fitz.Point(510, y0 + 42), f"Cód: {cod_uuid[:10]}...", fontsize=4.4, fontname="helv", color=(0.4, 0.4, 0.4))
+
+    firma_bytes = procesar_firma_transparente()
+    if firma_bytes and estampador_activo:
+        pagina1.insert_image(fitz.Rect(445, y0 + 62, 575, y1 - 4), stream=firma_bytes)
+
+    pix = pagina1.get_pixmap(dpi=130)
+    img_prev = pix.tobytes("png")
+    pdf_out = doc.tobytes()
+    doc.close()
+    return pdf_out, img_prev
+
+def generar_pdf_ergometria_completo(d, texto_informe, perfil, cod_uuid, imagenes_adjuntas=[]):
+    doc = fitz.open()
+    page = doc.new_page(width=612, height=792)
+
+    logo_bytes = None
+    for nom in ["cencardio.jpg", "cencardio.png", "cencardio.jpeg", "logo.png", "logo.jpg"]:
+        if os.path.exists(nom):
+            with open(nom, "rb") as f: logo_bytes = f.read()
+            break
+    if logo_bytes:
+        page.insert_image(fitz.Rect(36, 30, 150, 75), stream=logo_bytes)
+
+    page.insert_text(fitz.Point(165, 45), "CENTRO CARDIOVASCULAR COLOMBIANO CENCARDIO", fontsize=11, fontname="helv", color=(0.04, 0.15, 0.25))
+    page.insert_text(fitz.Point(165, 58), "INFORME DE ERGOMETRÍA Y PRUEBA DE ESFUERZO COMPUTARIZADA", fontsize=8.5, fontname="helv", color=(0.78, 0.06, 0.18))
+    page.insert_text(fitz.Point(165, 70), "CUPS: 893805 · Habilitación MinSalud Colombia · Res. 3100 de 2019", fontsize=7, fontname="helv", color=(0.4, 0.45, 0.5))
+    page.draw_rect(fitz.Rect(36, 85, 576, 87), color=None, fill=(0.04, 0.15, 0.25), overlay=True)
+
+    page.draw_rect(fitz.Rect(36, 95, 576, 155), color=(0.85, 0.9, 0.95), fill=(0.97, 0.98, 1.0), width=1)
+    page.insert_text(fitz.Point(46, 112), f"PACIENTE: {d['paciente'].upper()}", fontsize=8.5, fontname="helv", color=(0.04, 0.15, 0.25))
+    page.insert_text(fitz.Point(46, 126), f"DOCUMENTO: {d['cedula']}    |    EDAD: {d['edad']} AÑOS    |    SEXO: {d['sexo']}", fontsize=7.5, fontname="helv", color=(0.2, 0.25, 0.3))
+    page.insert_text(fitz.Point(46, 140), f"FECHA DEL ESTUDIO: {ahora_colombia().strftime('%d/%m/%Y')}    |    MÉDICO LECTOR: {perfil['nombre_completo']}", fontsize=7.5, fontname="helv", color=(0.2, 0.25, 0.3))
+
+    fcm_prev = 220 - d["edad"] if d["edad"] > 0 else 200
+    porc = round((d["fc_pico"] / fcm_prev) * 100) if (fcm_prev > 0 and d["fc_pico"] > 0) else 0
+    cajas = [
+        ("FC PICO ALCANZADA", f"{d['fc_pico']} lpm ({porc}%)"),
+        ("PA ESFUERZO PICO", f"{d['pas_pico']}/{d['pad_pico']} mmHg"),
+        ("CARGA FUNCIONAL", f"{d['mets']} METs ({d['tiempo_min']:.2f} m)"),
+        ("DOBLE PRODUCTO", f"{d['fc_pico']*d['pas_pico']:,}")
+    ]
+    x_offset = 36
+    for tit, val in cajas:
+        rect_m = fitz.Rect(x_offset, 163, x_offset + 130, 203)
+        page.draw_rect(rect_m, color=(0.88, 0.91, 0.94), fill=(1, 1, 1), width=1)
+        page.draw_rect(fitz.Rect(x_offset, 163, x_offset + 130, 166), color=None, fill=(0.04, 0.15, 0.25))
+        page.insert_text(fitz.Point(x_offset + 8, 178), tit, fontsize=5.8, fontname="helv", color=(0.4, 0.45, 0.5))
+        page.insert_text(fitz.Point(x_offset + 8, 195), val, fontsize=8.5, fontname="helv", color=(0.04, 0.15, 0.25))
+        x_offset += 136
+
+    rect_caja = fitz.Rect(36, 215, 576, 680)
+    page.draw_rect(rect_caja, color=(0.88, 0.91, 0.94), fill=(1, 1, 1), width=1)
+    page.insert_textbox(rect_caja, texto_informe, fontsize=6.8, fontname="helv", color=(0.1, 0.15, 0.2), align=fitz.TEXT_ALIGN_LEFT)
+
+    qr_bytes = generar_qr_verificacion(d['paciente'], perfil['nombre_completo'], ahora_colombia().strftime("%Y-%m-%d"), cod_uuid, "CUPS 893805")
+    page.insert_image(fitz.Rect(48, 695, 100, 747), stream=qr_bytes)
+    page.insert_text(fitz.Point(108, 715), "Certificado Digital Forense", fontsize=6.2, fontname="helv", color=(0.04, 0.15, 0.25))
+    page.insert_text(fitz.Point(108, 726), "Res. 3100 de 2019 · Habilitación MinSalud", fontsize=5.5, fontname="helv", color=(0.4, 0.45, 0.5))
+    page.insert_text(fitz.Point(108, 737), f"Cód: {cod_uuid[:16]}...", fontsize=5.2, fontname="helv", color=(0.4, 0.45, 0.5))
+
+    firma_bytes = procesar_firma_transparente()
+    if firma_bytes and perfil["id"] in ["dr.amaya", "admin"]:
+        page.insert_image(fitz.Rect(390, 690, 545, 755), stream=firma_bytes)
+
+    pix = page.get_pixmap(dpi=130)
+    img_preview = pix.tobytes("png")
+
+    if imagenes_adjuntas:
+        for img_file in imagenes_adjuntas:
+            try:
+                p_extra = doc.new_page(width=612, height=792)
+                data_img = img_file.getvalue() if hasattr(img_file, "getvalue") else img_file
+                p_extra.insert_image(fitz.Rect(20, 20, 592, 772), stream=data_img)
+            except Exception: pass
+
+    pdf_bytes = doc.tobytes()
+    doc.close()
+    return pdf_bytes, img_preview
+
+def detectar_tipo_documento_clinico(pdf_bytes):
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    texto = "".join([p.get_text() + "\n" for p in doc])
+    doc.close()
+    if any(k in texto for k in ["Sentinel", "Presión arterial por la mañana", "Informe de MAPA", "AASI"]):
+        return "MAPA"
+    elif any(k in texto for k in ["Informe Holter", "Latidos ventriculares", "Pathfinder SL", "Arritmias ventriculares"]):
+        return "HOLTER"
+    return "DESCONOCIDO"
+
+def generar_grafica_tacograma(d):
+    fc_prom = d.get("fc_prom", 75)
+    fc_dia = d.get("fc_dia", int(fc_prom * 1.05))
+    fc_noc = d.get("fc_noc", int(fc_prom * 0.90))
+    fc_max = d.get("fc_max", 100)
+    fc_min = d.get("fc_min", 55)
+
+    horas = [f"{h:02d}:00" for h in range(24)]
+    fc_curva = []
+    for h in range(24):
+        if 6 <= h <= 21:
+            val = fc_dia + (fc_max - fc_dia) * 0.25 * ((h % 4) / 4)
+        else:
+            val = fc_noc - (fc_noc - fc_min) * 0.3 * ((h % 3) / 3)
+        fc_curva.append(round(max(fc_min, min(fc_max, val))))
+
+    fig = go.Figure()
+    fig.add_hrect(y0=60, y1=100, fillcolor="rgba(10, 37, 64, 0.04)", line_width=0, annotation_text="Normal (60-100)", annotation_position="top left", annotation_font_size=9)
+    fig.add_trace(go.Scatter(x=horas, y=fc_curva, mode='lines+markers', name='FC (lpm)', line=dict(color='#0A2540', width=2.5), marker=dict(size=4, color='#C8102E')))
+    fig.add_hline(y=fc_prom, line_dash="dot", line_color="#0284c7", annotation_text=f"Prom: {fc_prom} lpm", annotation_position="bottom right")
+    fig.update_layout(title="<b>Tacograma Horario y Variabilidad Circadiana (24 Horas)</b>", height=240, margin=dict(l=35, r=20, t=35, b=25), plot_bgcolor="#ffffff", paper_bgcolor="#ffffff", showlegend=False)
+    return fig
+
+# ==============================================================================
+# GENERADOR AVANZADO DE EXCEL INSTITUCIONAL
+# ==============================================================================
+def generar_excel_avanzado_produccion(df_base):
+    if not OPENPYXL_INSTALADO:
+        csv_str = df_base.to_csv(sep=';', index=False, encoding='utf-8-sig')
+        return csv_str.encode('utf-8-sig'), "csv"
+
+    output = io.BytesIO()
+    wb = openpyxl.Workbook()
+    
+    ws_resumen = wb.active
+    ws_resumen.title = "📊 Tablero Gerencial"
+    ws_resumen.views.sheetView[0].showGridLines = True
+
+    fill_navy = PatternFill(start_color="0A2540", end_color="0A2540", fill_type="solid")
+    fill_wine = PatternFill(start_color="C8102E", end_color="C8102E", fill_type="solid")
+    fill_light = PatternFill(start_color="F1F5F9", end_color="F1F5F9", fill_type="solid")
+    font_header = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+    font_bold = Font(name="Calibri", size=11, bold=True, color="0A2540")
+    border_thin = Border(
+        left=Side(style='thin', color='CBD5E1'), right=Side(style='thin', color='CBD5E1'),
+        top=Side(style='thin', color='CBD5E1'), bottom=Side(style='thin', color='CBD5E1')
+    )
+
+    ws_resumen["B2"] = "CENTRO CARDIOVASCULAR COLOMBIANO CENCARDIO"
+    ws_resumen["B2"].font = Font(name="Calibri", size=14, bold=True, color="0A2540")
+    ws_resumen["B3"] = f"REPORTE GERENCIAL DE PRODUCCIÓN · EMITIDO: {ahora_colombia().strftime('%d/%m/%Y %H:%M')}"
+    ws_resumen["B3"].font = Font(name="Calibri", size=9, bold=True, color="64748B")
+
+    ws_resumen["B5"] = "PRODUCCIÓN POR MODALIDAD DIAGNÓSTICA"
+    ws_resumen["B5"].font = font_bold
+    headers_mod = ["Modalidad Diagnóstica", "Código CUPS", "Total Estudios", "% Participación"]
+    for col_idx, h in enumerate(headers_mod, start=2):
+        cell = ws_resumen.cell(row=6, column=col_idx, value=h)
+        cell.fill = fill_navy
+        cell.font = font_header
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    prod_mod = df_base.groupby(["modalidad", "cups"]).size().reset_index(name="Cantidad")
+    total_estudios = len(df_base)
+    r_idx = 7
+    for _, fila in prod_mod.iterrows():
+        pct = (fila["Cantidad"] / total_estudios) * 100 if total_estudios > 0 else 0
+        ws_resumen.cell(row=r_idx, column=2, value=fila["modalidad"]).border = border_thin
+        ws_resumen.cell(row=r_idx, column=3, value=fila["cups"]).border = border_thin
+        c_cant = ws_resumen.cell(row=r_idx, column=4, value=fila["Cantidad"])
+        c_cant.border = border_thin
+        c_cant.alignment = Alignment(horizontal="center")
+        c_pct = ws_resumen.cell(row=r_idx, column=5, value=f"{pct:.1f}%")
+        c_pct.border = border_thin
+        c_pct.alignment = Alignment(horizontal="center")
+        r_idx += 1
+
+    ws_resumen.cell(row=r_idx, column=2, value="TOTAL GENERAL").font = font_bold
+    ws_resumen.cell(row=r_idx, column=4, value=total_estudios).font = font_bold
+    ws_resumen.cell(row=r_idx, column=4).alignment = Alignment(horizontal="center")
+    ws_resumen.cell(row=r_idx, column=5, value="100.0%").font = font_bold
+    ws_resumen.cell(row=r_idx, column=5).alignment = Alignment(horizontal="center")
+    r_idx += 3
+
+    ws_detalle = wb.create_sheet(title="📁 Detalle RIPS y Facturación")
+    ws_detalle.views.sheetView[0].showGridLines = True
+
+    headers_detalle = ["N° ID", "Fecha Registro", "Paciente", "Modalidad", "CUPS", "Métrica Clave", "Especialista Lector", "Código Forense"]
+    for col_num, h in enumerate(headers_detalle, 1):
+        cell = ws_detalle.cell(row=1, column=col_num, value=h)
+        cell.fill = fill_navy
+        cell.font = font_header
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        ws_detalle.row_dimensions[1].height = 26
+
+    columnas_ordenadas = ["id", "fecha_registro", "paciente", "modalidad", "cups", "parametro_clave", "medico", "codigo_verificacion"]
+    df_exp = df_base[columnas_ordenadas].copy()
+
+    for r_idx_d, fila in enumerate(df_exp.itertuples(index=False), start=2):
+        ws_detalle.row_dimensions[r_idx_d].height = 20
+        fill_row = fill_light if (r_idx_d % 2 == 0) else None
+        for c_idx, valor in enumerate(fila, start=1):
+            cell = ws_detalle.cell(row=r_idx_d, column=c_idx, value=str(valor))
+            cell.border = border_thin
+            if fill_row: cell.fill = fill_row
+            if c_idx in [1, 5]: cell.alignment = Alignment(horizontal="center")
+
+    for ws in [ws_resumen, ws_detalle]:
+        for col in ws.columns:
+            max_len = max(len(str(cell.value or '')) for cell in col)
+            col_letter = get_column_letter(col[0].column)
+            ws.column_dimensions[col_letter].width = max(max_len + 3, 12)
+
+    wb.save(output)
+    return output.getvalue(), "xlsx"
+
+# ==============================================================================
+# PERFILES MÉDICOS OFICIALES & CONTROL DE ACCESO (LOGIN)
+# ==============================================================================
+LISTA_ESPECIALISTAS = [
+    {
+        "id": "dr.amaya",
+        "etiqueta": "Dr. William Amaya Ramirez (Internista - Cardiólogo)",
+        "clave": "Cardio2025*",
+        "nombre_completo": "DR. WILLIAM AMAYA RAMIREZ",
+        "especialidad": "INTERNISTA - CARDIÓLOGO",
+        "registro": "RM 79.502.624 SDS"
+    },
+    {
+        "id": "dr.suarez",
+        "etiqueta": "Dr. Martin Suárez Arámbula (Cardiólogo Hemodinamista)",
+        "clave": "Suarez2026*",
+        "nombre_completo": "DR. MARTIN SUÁREZ ARÁMBULA",
+        "especialidad": "MÉDICO INTERNISTA - CARDIÓLOGO HEMODINAMISTA",
+        "registro": "RM 13491094"
+    },
+    {
+        "id": "dra.cardio",
+        "etiqueta": "Dra. Paola Figueroa (Cardióloga)",
+        "clave": "Cardio2026*",
+        "nombre_completo": "DRA. PAOLA FIGUEROA",
+        "especialidad": "MÉDICO ESPECIALISTA EN CARDIOLOGÍA",
+        "registro": "RM 52.890.123 SDS"
+    },
+    {
+        "id": "admin",
+        "etiqueta": "Administración del Sistema",
+        "clave": "HolterClaveSegura123",
+        "nombre_completo": "DR. WILLIAM AMAYA RAMIREZ",
+        "especialidad": "INTERNISTA - CARDIÓLOGO",
+        "registro": "RM 79.502.624 SDS"
+    }
+]
+
+PERFILES_POR_ID = {m["id"]: m for m in LISTA_ESPECIALISTAS}
+OPCIONES_NOMBRES = [m["etiqueta"] for m in LISTA_ESPECIALISTAS]
+
+if "autenticado" not in st.session_state:
+    st.session_state.autenticado = False
+if "usuario_actual" not in st.session_state:
+    st.session_state.usuario_actual = ""
+
+def cerrar_sesion():
+    st.session_state.autenticado = False
+    st.session_state.usuario_actual = ""
+
+# ==============================================================================
+# VALIDACIÓN PÚBLICA POR QR (RES. 3100)
+# ==============================================================================
+params = st.query_params
+if "val" in params:
+    codigo_val = params.get("val", "N/A")
+    paciente_val = urllib.parse.unquote(params.get("pac", "Paciente"))
+    medico_val = urllib.parse.unquote(params.get("med", "Especialista CENCARDIO"))
+    fecha_val = urllib.parse.unquote(params.get("fec", ahora_colombia().strftime("%Y-%m-%d")))
+    proc_val = urllib.parse.unquote(params.get("proc", "Procedimiento Cardiológico"))
+
+    c_v1, c_v2, c_v3 = st.columns([1, 1.8, 1])
+    with c_v2:
+        logo_data = obtener_logo_b64()
+        logo_html = f'<img src="{logo_data}" style="max-width:180px; margin-bottom:1rem;" alt="Cencardio Logo">' if logo_data else '<div style="font-size:3rem; margin-bottom:0.4rem;">🫀</div>'
+
+        st.markdown(f"""
+            <div class="cencardio-card">
+                {logo_html}
+                <div style="font-size: 1.25rem; font-weight: 800; color: #0a2540; text-transform: uppercase;">
+                    Centro Cardiovascular Colombiano
+                </div>
+                <div style="font-size: 0.82rem; font-weight: 700; color: #c8102e; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 1.5rem;">
+                    CENCARDIO · Certificado de Autenticidad Forense
+                </div>
+                <div style="background: #f0fdf4; border: 1.5px solid #86efac; border-radius: 12px; padding: 1.3rem; margin-bottom: 1.5rem; text-align: left;">
+                    <div style="color: #166534; font-size: 1rem; font-weight: 800; margin-bottom: 0.6rem; display: flex; align-items: center; gap: 8px;">
+                        <span>✅</span> ESTUDIO MÉDICO CERTIFICADO Y VÁLIDO
+                    </div>
+                    <div style="font-size: 0.88rem; color: #1f2937; line-height: 1.6;">
+                        <b>Procedimiento:</b> {proc_val}<br>
+                        <b>Paciente:</b> {paciente_val}<br>
+                        <b>Especialista Lector:</b> {medico_val}<br>
+                        <b>Fecha de Emisión:</b> {fecha_val}<br>
+                        <b>Identificador Único:</b> <span style="font-family: monospace; color: #0369a1; font-weight: 700;">{codigo_val}</span><br>
+                        <b>Normativa:</b> Res. 3100 de 2019 / Habilitación MinSalud Colombia
+                    </div>
+                </div>
+                <div style="font-size: 0.78rem; color: #64748b; line-height: 1.4;">
+                    Documento custodiado bajo el estándar de Historia Clínica Electrónica del Centro Cardiovascular Colombiano CENCARDIO.
+                </div>
+            </div>
+        """, unsafe_allow_html=True)
+        
+        if st.button("Ir al Portal de Operaciones", use_container_width=True):
+            st.query_params.clear()
+            st.rerun()
+
+    st.stop()
+
+# ==============================================================================
+# BARRERA DE AUTENTICACIÓN
+# ==============================================================================
+if not st.session_state.autenticado:
+    c_izq, c_cen, c_der = st.columns([1, 1.6, 1])
+    with c_cen:
+        logo_data = obtener_logo_b64()
+        logo_html = f'<img src="{logo_data}" style="max-width:170px; margin-bottom:1rem;" alt="Cencardio Logo">' if logo_data else '<div style="font-size:3rem; margin-bottom:0.4rem;">🫀</div>'
+
+        st.markdown(f"""
+            <div class="cencardio-card">
+                {logo_html}
+                <div style="font-size: 1.25rem; font-weight: 800; color: #0a2540; text-transform: uppercase;">
+                    Centro Cardiovascular Colombiano
+                </div>
+                <div style="font-size: 0.8rem; font-weight: 700; color: #c8102e; letter-spacing: 0.6px; text-transform: uppercase; margin-bottom: 1.8rem;">
+                    CENCARDIO · Workstation Diagnóstica
+                </div>
+        """, unsafe_allow_html=True)
+
+        with st.form("form_login"):
+            seleccion_etiqueta = st.selectbox("Especialista Responsable:", options=OPCIONES_NOMBRES, index=0)
+            clave = st.text_input("Contraseña de Acceso:", type="password")
+            if st.form_submit_button("Ingresar a la Estación", use_container_width=True):
+                medico = next(m for m in LISTA_ESPECIALISTAS if m["etiqueta"] == seleccion_etiqueta)
+                if medico["clave"] == clave:
+                    st.session_state.autenticado = True
+                    st.session_state.usuario_actual = medico["id"]
+                    st.rerun()
+                else:
+                    st.error("❌ Contraseña incorrecta para el especialista seleccionado.")
+        st.markdown('</div>', unsafe_allow_html=True)
+    st.stop()
+
+# ==============================================================================
+# SESIÓN ACTIVA: BARRA LATERAL (SE DEFINE OBLIGATORIAMENTE ANTES DEL CONTENIDO)
+# ==============================================================================
+perfil_activo = PERFILES_POR_ID[st.session_state.usuario_actual]
+
+with st.sidebar:
+    logo_data_sidebar = obtener_logo_b64()
+    if logo_data_sidebar:
+        st.markdown(f'<div style="text-align:center; margin-bottom:1.2rem;"><img src="{logo_data_sidebar}" style="max-width:145px;"></div>', unsafe_allow_html=True)
+    
+    st.markdown(f"""
+        <div class="specialist-card">
+            <div style="font-weight:800; font-size:0.95rem;">{perfil_activo['nombre_completo']}</div>
+            <div style="font-size:0.74rem; color:#93c5fd; text-transform:uppercase; margin-top:2px;">{perfil_activo['especialidad']}</div>
+            <div style="font-size:0.72rem; color:#cbd5e1; font-family:'JetBrains Mono'; margin-top:6px;">{perfil_activo['registro']}</div>
+        </div>
+    """, unsafe_allow_html=True)
+
+    firma_disponible = procesar_firma_transparente()
+    if firma_disponible and perfil_activo["id"] in ["dr.amaya", "admin"]:
+        st.success("🖋️ Sello digitalizado cargado.")
+        
+    st.divider()
+    modalidad_seleccionada = st.radio(
+        "Modalidad Diagnóstica:",
+        ["🫀 Holter ECG 24H (CUPS 895001)", "🩺 MAPA Tensional 24H (CUPS 895003)", "🏃 Prueba de Esfuerzo (CUPS 893805)"]
+    )
+
+    st.divider()
+    archivo_dinamica = st.file_uploader("Directorio Dinámica (Excel o CSV):", type=["xlsx", "xls", "csv"], key="sync_dinamica")
+    if archivo_dinamica is not None:
+        try:
+            df_din = pd.read_csv(archivo_dinamica) if archivo_dinamica.name.endswith(".csv") else pd.read_excel(archivo_dinamica)
+            ok, msg = sincronizar_directorio_servicio(df_din)
+            if ok: st.success(msg)
+            else: st.error(msg)
+        except Exception as e: st.error(f"Error: {e}")
+
+    st.divider()
+    if st.button("Cerrar Sesión", use_container_width=True):
+        cerrar_sesion()
+        st.rerun()
+
+# Cabecera Superior en Pantalla Principal
 estado_nube_txt = "🟢 Nube Supabase Activa" if supabase else "🟡 Almacenamiento Local (SQLite)"
 st.markdown(f"""
     <div class="top-hospital-bar">
@@ -797,7 +1362,6 @@ with tab_procesar:
                 key="uploader_fotos_erg"
             )
 
-            # Auto-extracción multimodal con Gemini / Tesseract
             if fotos_esfuerzo:
                 nombres_hash = "".join([f.name for f in fotos_esfuerzo])
                 if st.session_state.get("fotos_erg_procesadas") != nombres_hash:
