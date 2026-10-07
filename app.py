@@ -36,13 +36,17 @@ try:
 except ImportError:
     SUPABASE_LIB_OK = False
 
-# Importación segura de OCR
+# Diagnóstico activo del binario Tesseract en Linux/Windows
+OCR_DISPONIBLE = False
+MENSAJE_ESTADO_OCR = ""
 try:
     import pytesseract
     _ = pytesseract.get_tesseract_version()
     OCR_DISPONIBLE = True
-except Exception:
+    MENSAJE_ESTADO_OCR = "Motor Tesseract instalado y activo en el sistema."
+except Exception as e:
     OCR_DISPONIBLE = False
+    MENSAJE_ESTADO_OCR = "Motor Tesseract no detectado en el servidor. Añada 'tesseract-ocr' a packages.txt."
 
 st.set_page_config(
     page_title="Centro Cardiovascular Colombiano CENCARDIO · Workstation",
@@ -50,6 +54,19 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# ==============================================================================
+# GESTIÓN DE LOGOTIPO INSTITUCIONAL
+# ==============================================================================
+@st.cache_data
+def obtener_logo_b64():
+    for nom in ["cencardio.jpg", "cencardio.png", "cencardio.jpeg", "logo.png", "logo.jpg"]:
+        if os.path.exists(nom):
+            with open(nom, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode()
+            mime = "png" if nom.endswith("png") else "jpeg"
+            return f"data:image/{mime};base64,{b64}"
+    return None
 
 # ==============================================================================
 # CONECTOR DE NUBE PERSISTENTE: SUPABASE & FALLBACK SQLITE
@@ -106,7 +123,6 @@ def guardar_estudio_servicio(nombre, modalidad, cups, parametro_clave, medico, t
 
     if supabase:
         try:
-            # 1. Subir PDF al Bucket 'estudios-pdf'
             supabase.storage.from_("estudios-pdf").upload(
                 path=nombre_archivo,
                 file=pdf_bytes,
@@ -114,7 +130,6 @@ def guardar_estudio_servicio(nombre, modalidad, cups, parametro_clave, medico, t
             )
             pdf_url = supabase.storage.from_("estudios-pdf").get_public_url(nombre_archivo)
 
-            # 2. Guardar registro relacional sin saturar base de datos
             supabase.table("estudios").insert({
                 "fecha_registro": ahora_colombia().isoformat(),
                 "paciente_nombre": nombre,
@@ -130,7 +145,6 @@ def guardar_estudio_servicio(nombre, modalidad, cups, parametro_clave, medico, t
         except Exception as e:
             st.error(f"Error subiendo a Supabase: {e}. Guardando respaldo local...")
 
-    # Respaldo SQLite local defensivo
     conn = sqlite3.connect("historial_cencardio.db")
     c = conn.cursor()
     c.execute("""
@@ -147,7 +161,6 @@ def obtener_historial_servicio():
             res = supabase.table("estudios").select("id, fecha_registro, paciente_nombre, modalidad, cups, parametro_clave, medico_firmante, pdf_url, codigo_verificacion").order("id", desc=True).execute()
             lista = []
             for r in res.data:
-                # Parsear fecha a formato estándar
                 f_raw = r.get("fecha_registro", "")
                 try:
                     f_dt = datetime.fromisoformat(f_raw.replace("Z", "+00:00")).astimezone(TZ_COLOMBIA)
@@ -170,7 +183,6 @@ def obtener_historial_servicio():
         except Exception:
             pass
 
-    # Consulta SQLite optimizada (sin cargar BLOB en memoria global)
     conn = sqlite3.connect("historial_cencardio.db")
     c = conn.cursor()
     c.execute("SELECT id, fecha_registro, paciente_nombre, modalidad, cups, parametro_clave, medico_firmante, codigo_verificacion FROM estudios ORDER BY id DESC")
@@ -454,6 +466,101 @@ def procesar_firma_transparente():
 def normalizar_nombre_archivo(nombre):
     limpio = re.sub(r'[^A-Za-z0-9ÁÉÍÓÚáéíóúÑñ\s]', ' ', nombre)
     return re.sub(r'\s+', '_', limpio).strip('_') or "PACIENTE"
+
+# ==========================================
+# GENERADOR AVANZADO DE EXCEL INSTITUCIONAL
+# ==========================================
+def generar_excel_avanzado_produccion(df_base):
+    if not OPENPYXL_INSTALADO:
+        csv_str = df_base.to_csv(sep=';', index=False, encoding='utf-8-sig')
+        return csv_str.encode('utf-8-sig'), "csv"
+
+    output = io.BytesIO()
+    wb = openpyxl.Workbook()
+    
+    ws_resumen = wb.active
+    ws_resumen.title = "📊 Tablero Gerencial"
+    ws_resumen.views.sheetView[0].showGridLines = True
+
+    fill_navy = PatternFill(start_color="0A2540", end_color="0A2540", fill_type="solid")
+    fill_wine = PatternFill(start_color="C8102E", end_color="C8102E", fill_type="solid")
+    fill_light = PatternFill(start_color="F1F5F9", end_color="F1F5F9", fill_type="solid")
+    font_header = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+    font_bold = Font(name="Calibri", size=11, bold=True, color="0A2540")
+    border_thin = Border(
+        left=Side(style='thin', color='CBD5E1'), right=Side(style='thin', color='CBD5E1'),
+        top=Side(style='thin', color='CBD5E1'), bottom=Side(style='thin', color='CBD5E1')
+    )
+
+    ws_resumen["B2"] = "CENTRO CARDIOVASCULAR COLOMBIANO CENCARDIO"
+    ws_resumen["B2"].font = Font(name="Calibri", size=14, bold=True, color="0A2540")
+    ws_resumen["B3"] = f"REPORTE GERENCIAL DE PRODUCCIÓN · EMITIDO: {ahora_colombia().strftime('%d/%m/%Y %H:%M')}"
+    ws_resumen["B3"].font = Font(name="Calibri", size=9, bold=True, color="64748B")
+
+    # Tabla 1: Estudios por Modalidad
+    ws_resumen["B5"] = "PRODUCCIÓN POR MODALIDAD DIAGNÓSTICA"
+    ws_resumen["B5"].font = font_bold
+    headers_mod = ["Modalidad Diagnóstica", "Código CUPS", "Total Estudios", "% Participación"]
+    for col_idx, h in enumerate(headers_mod, start=2):
+        cell = ws_resumen.cell(row=6, column=col_idx, value=h)
+        cell.fill = fill_navy
+        cell.font = font_header
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    prod_mod = df_base.groupby(["modalidad", "cups"]).size().reset_index(name="Cantidad")
+    total_estudios = len(df_base)
+    r_idx = 7
+    for _, fila in prod_mod.iterrows():
+        pct = (fila["Cantidad"] / total_estudios) * 100 if total_estudios > 0 else 0
+        ws_resumen.cell(row=r_idx, column=2, value=fila["modalidad"]).border = border_thin
+        ws_resumen.cell(row=r_idx, column=3, value=fila["cups"]).border = border_thin
+        c_cant = ws_resumen.cell(row=r_idx, column=4, value=fila["Cantidad"])
+        c_cant.border = border_thin
+        c_cant.alignment = Alignment(horizontal="center")
+        c_pct = ws_resumen.cell(row=r_idx, column=5, value=f"{pct:.1f}%")
+        c_pct.border = border_thin
+        c_pct.alignment = Alignment(horizontal="center")
+        r_idx += 1
+
+    ws_resumen.cell(row=r_idx, column=2, value="TOTAL GENERAL").font = font_bold
+    ws_resumen.cell(row=r_idx, column=4, value=total_estudios).font = font_bold
+    ws_resumen.cell(row=r_idx, column=4).alignment = Alignment(horizontal="center")
+    ws_resumen.cell(row=r_idx, column=5, value="100.0%").font = font_bold
+    ws_resumen.cell(row=r_idx, column=5).alignment = Alignment(horizontal="center")
+    r_idx += 3
+
+    # Tabla 2: Detalle Completo
+    ws_detalle = wb.create_sheet(title="📁 Detalle RIPS y Facturación")
+    ws_detalle.views.sheetView[0].showGridLines = True
+
+    headers_detalle = ["N° ID", "Fecha Registro", "Paciente", "Modalidad", "CUPS", "Métrica Clave", "Especialista Lector", "Código Forense"]
+    for col_num, h in enumerate(headers_detalle, 1):
+        cell = ws_detalle.cell(row=1, column=col_num, value=h)
+        cell.fill = fill_navy
+        cell.font = font_header
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        ws_detalle.row_dimensions[1].height = 26
+
+    columnas_ordenadas = ["id", "fecha_registro", "paciente", "modalidad", "cups", "parametro_clave", "medico", "codigo_verificacion"]
+    df_exp = df_base[columnas_ordenadas].copy()
+
+    for r_idx_d, fila in enumerate(df_exp.itertuples(index=False), start=2):
+        ws_detalle.row_dimensions[r_idx_d].height = 20
+        fill_row = fill_light if (r_idx_d % 2 == 0) else None
+        for c_idx, valor in enumerate(fila, start=1):
+            cell = ws_detalle.cell(row=r_idx_d, column=c_idx, value=str(valor))
+            cell.border = border_thin
+            if fill_row: cell.fill = fill_row
+            if c_idx in [1, 5]: cell.alignment = Alignment(horizontal="center")
+
+    for ws in [ws_resumen, ws_detalle]:
+        for col in ws.columns:
+            max_len = max(len(str(cell.value or '')) for cell in col)
+            col_letter = get_column_letter(col[0].column)
+            ws.column_dimensions[col_letter].width = max(max_len + 3, 12)
+
+    wb.save(output)
+    return output.getvalue(), "xlsx"
 
 # ==========================================
 # PERFILES MÉDICOS OFICIALES
@@ -779,7 +886,7 @@ RECOMENDACIONES: {'Continuar manejo médico integral y prescripción de activida
 {perfil['registro']}"""
 
 # ==============================================================================
-# INYECCIÓN DE PDFS SIN CONFLICTOS DE MEMORIA NI SUPERPOSICIÓN
+# INYECCIÓN DE PDFS
 # ==============================================================================
 def inyectar_holter_pdf(pdf_bytes, texto_informe, paciente_nom, perfil, cod_uuid, estampador_activo=False):
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
@@ -791,7 +898,6 @@ def inyectar_holter_pdf(pdf_bytes, texto_informe, paciente_nom, perfil, cod_uuid
     y0 = (rects_h[0].y1 + 4) if rects_h else 545
     y1 = y_base - 62
 
-    # Blanqueado completo inferior de margen a margen
     pagina1.draw_rect(fitz.Rect(0, y0, pagina1.rect.width, y1), color=None, fill=(1, 1, 1), overlay=True)
 
     font_size_optimo = 5.6
@@ -805,7 +911,6 @@ def inyectar_holter_pdf(pdf_bytes, texto_informe, paciente_nom, perfil, cod_uuid
 
     pagina1.insert_textbox(fitz.Rect(35, y0, pagina1.rect.width - 36, y1), texto_informe, fontsize=font_size_optimo, fontname="helv", color=(0, 0, 0), align=fitz.TEXT_ALIGN_LEFT)
 
-    # Zona de QR y Firma
     pagina1.draw_rect(fitz.Rect(220, y_base - 58, pagina1.rect.width, y_base + 12), color=None, fill=(1, 1, 1), overlay=True)
     qr_bytes = generar_qr_verificacion(paciente_nom, perfil['nombre_completo'], ahora_colombia().strftime("%Y-%m-%d"), cod_uuid, "CUPS 895001")
     pagina1.insert_image(fitz.Rect(230, y_base - 32, 270, y_base + 8), stream=qr_bytes)
@@ -833,7 +938,6 @@ def inyectar_mapa_pdf(pdf_bytes, texto_informe, paciente_nom, perfil, cod_uuid, 
     y0 = (rect_m[0].y1 + 2) if rect_m else 230
     y1 = (rect_r[0].y0 - 4) if rect_r else 425
 
-    # Borrado de borde a borde total (x=0 hasta width) para suprimir texto residual previo
     pagina1.draw_rect(fitz.Rect(0, y0, pagina1.rect.width, y1), color=None, fill=(1, 1, 1), overlay=True)
 
     font_size = 6.4
@@ -916,7 +1020,6 @@ def generar_pdf_ergometria_completo(d, texto_informe, perfil, cod_uuid, imagenes
     if firma_bytes and perfil["id"] in ["dr.amaya", "admin"]:
         page.insert_image(fitz.Rect(390, 690, 545, 755), stream=firma_bytes)
 
-    # Renderizar antes de agregar páginas para prevenir error de puntero en C++
     pix = page.get_pixmap(dpi=130)
     img_preview = pix.tobytes("png")
 
@@ -1213,24 +1316,18 @@ with tab_historial:
         with col_r1:
             st.markdown(f"**Total de estudios custodiados ({origen_datos}):** `{len(df_produccion)} procedimientos certificados`")
         with col_r2:
-            if OPENPYXL_INSTALADO:
-                # Armar buffer de Excel
-                wb = openpyxl.Workbook()
-                ws = wb.active
-                ws.title = "Reporte General"
-                ws.append(["ID", "Fecha de Registro", "Paciente", "Modalidad", "CUPS", "Métrica Clave", "Especialista Lector", "Código Forense"])
-                for r in historial:
-                    ws.append([r["id"], r["fecha_registro"], r["paciente"], r["modalidad"], r["cups"], r["parametro_clave"], r["medico"], r["codigo_verificacion"]])
-                buf_xls = io.BytesIO()
-                wb.save(buf_xls)
-                st.download_button(
-                    label="📊 DESCARGAR REPORTE EXCEL (.XLSX)",
-                    data=buf_xls.getvalue(),
-                    file_name=f"Reporte_Cencardio_{ahora_colombia().strftime('%Y%m%d')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True,
-                    type="primary"
-                )
+            excel_bytes, ext_salida = generar_excel_avanzado_produccion(df_produccion)
+            mime_tipo = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" if ext_salida == "xlsx" else "text/csv"
+            etiqueta_boton = "📊 DESCARGAR REPORTE EXCEL GERENCIAL (.XLSX)" if ext_salida == "xlsx" else "📊 DESCARGAR REPORTE RIPS (CSV EXCEL)"
+
+            st.download_button(
+                label=etiqueta_boton,
+                data=excel_bytes,
+                file_name=f"Reporte_Gerencial_Cencardio_{ahora_colombia().strftime('%Y%m%d')}.{ext_salida}",
+                mime=mime_tipo,
+                use_container_width=True,
+                type="primary"
+            )
 
         st.divider()
 
@@ -1278,7 +1375,6 @@ with tab_historial:
 
                     c_d, c_del, c_v = st.columns([1.5, 1, 4])
                     with c_d:
-                        # Descarga bajo demanda (solo consume RAM al hacer clic)
                         if item.pdf_url:
                             st.link_button("📥 Ver / Descargar PDF", item.pdf_url, use_container_width=True)
                         else:
