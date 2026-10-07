@@ -497,7 +497,6 @@ def generar_excel_avanzado_produccion(df_base):
     ws_resumen["B3"] = f"REPORTE GERENCIAL DE PRODUCCIÓN · EMITIDO: {ahora_colombia().strftime('%d/%m/%Y %H:%M')}"
     ws_resumen["B3"].font = Font(name="Calibri", size=9, bold=True, color="64748B")
 
-    # Tabla 1: Estudios por Modalidad
     ws_resumen["B5"] = "PRODUCCIÓN POR MODALIDAD DIAGNÓSTICA"
     ws_resumen["B5"].font = font_bold
     headers_mod = ["Modalidad Diagnóstica", "Código CUPS", "Total Estudios", "% Participación"]
@@ -529,7 +528,6 @@ def generar_excel_avanzado_produccion(df_base):
     ws_resumen.cell(row=r_idx, column=5).alignment = Alignment(horizontal="center")
     r_idx += 3
 
-    # Tabla 2: Detalle Completo
     ws_detalle = wb.create_sheet(title="📁 Detalle RIPS y Facturación")
     ws_detalle.views.sheetView[0].showGridLines = True
 
@@ -681,362 +679,8 @@ def generar_grafica_tacograma(d):
     fig.update_layout(title="<b>Tacograma Horario y Variabilidad Circadiana (24 Horas)</b>", height=240, margin=dict(l=35, r=20, t=35, b=25), plot_bgcolor="#ffffff", paper_bgcolor="#ffffff", showlegend=False)
     return fig
 
-# ==============================================================================
-# MOTORES CLÍNICOS DINÁMICOS
-# ==============================================================================
-def limpiar_numero(val_str):
-    if not val_str: return 0
-    try: return int(float(str(val_str).replace(".", "").replace(",", ".")))
-    except: return 0
-
-def extraer_datos_holter(pdf_bytes, filename=""):
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    texto = "".join([p.get_text() + "\n" for p in doc])
-    doc.close()
-
-    d = {}
-    m_dx = re.search(r"(?:DX|DIAGN[ÓO]STICO|INDICACI[ÓO]N)\s*[:\.]?\s*([^\n\r\|]+)", texto, re.IGNORECASE) or re.search(r"Comentarios de la prueba:\s*\n?\s*([^\n\r\|]+)", texto, re.IGNORECASE)
-    d["dx_motivo"] = m_dx.group(1).strip().upper() if m_dx else ""
-
-    m_nom = re.search(r"([A-ZÁÉÍÓÚÑ\s]{3,50},\s*[A-ZÁÉÍÓÚÑ\s]{3,50})[\s\n]+(?:No confirmado|Confirmado|Reconfirmado)?[\s\n]*Informe Holter", texto)
-    d["paciente"] = m_nom.group(1).replace("\n", " ").strip() if m_nom else (os.path.splitext(filename)[0] if filename else "PACIENTE")
-
-    m_id = re.search(r"(?:ID\s*Paciente|ID|C\.?C\.?|Doc\.?|Historia)\s*[:\.]?\s*(\d{5,12})", texto, re.IGNORECASE)
-    d["cedula"] = m_id.group(1) if m_id else ""
-
-    fc_p = re.search(r"Prom\.?\s*(\d{2,3})", texto)
-    d["fc_prom"] = int(fc_p.group(1)) if fc_p else 75
-    fc_max = re.search(r"M[áa]x\s*(\d{2,3})", texto)
-    d["fc_max"] = int(fc_max.group(1)) if fc_max else 100
-    fc_min = re.search(r"M[íi]n\s*(\d{2,3})", texto)
-    d["fc_min"] = int(fc_min.group(1)) if fc_min else 55
-    fc_dia = re.search(r"D[íi]a.*?Prom\.?\s*(\d{2,3})", texto)
-    d["fc_dia"] = int(fc_dia.group(1)) if fc_dia else int(d["fc_prom"] * 1.05)
-    fc_noc = re.search(r"Noche.*?Prom\.?\s*(\d{2,3})", texto)
-    d["fc_noc"] = int(fc_noc.group(1)) if fc_noc else max(45, int(d["fc_prom"] * 0.90))
-
-    taqui_m = re.search(r"Taquicardia\s+(\d+)(?:[^\n\r\d]+(\d{2,3})\s*:\s*[^\n\r]+)?(?:[^\n\r\d]+(\d+)\s+latidos)?", texto)
-    d["taqui_conteo"] = int(taqui_m.group(1)) if taqui_m else 0
-    d["taqui_fc_max"] = int(taqui_m.group(2)) if (taqui_m and taqui_m.group(2)) else d["fc_max"]
-    d["taqui_duracion"] = int(taqui_m.group(3)) if (taqui_m and taqui_m.group(3)) else 0
-
-    bradi_m = re.search(r"Bradicardia\s+(\d+)(?:[^\n\r\d]+(\d{2,3})\s*:\s*[^\n\r]+)?(?:[^\n\r\d]+(\d+)\s+latidos)?", texto)
-    d["bradi_conteo"] = int(bradi_m.group(1)) if bradi_m else 0
-    d["bradi_fc_min"] = int(bradi_m.group(2)) if (bradi_m and bradi_m.group(2)) else d["fc_min"]
-    d["bradi_duracion"] = int(bradi_m.group(3)) if (bradi_m and bradi_m.group(3)) else 0
-
-    pausa_match = re.search(r"\bPausa\s+(\d+)", texto)
-    d["pausas"] = int(pausa_match.group(1)) if pausa_match else 0
-    p_max_m = re.search(r"Pausa.*?M[áa]x\.\s*longitud\s*([\d,\.]+)\s*s", texto)
-    d["pausa_max_seg"] = p_max_m.group(1).replace(",", ".") if p_max_m else "0"
-
-    lat_caido_m = re.search(r"Latidos?\s+ca[íi]dos?\s+(\d+)", texto)
-    d["latidos_caidos"] = int(lat_caido_m.group(1)) if lat_caido_m else 0
-
-    ev_m = re.search(r"Latidos ventriculares\s*:\s*([\d\.]+)", texto)
-    d["ev_total"] = limpiar_numero(ev_m.group(1)) if ev_m else 0
-    tv_m = re.search(r"\bTV\s+([\d\.]+)", texto)
-    d["tv_episodios"] = limpiar_numero(tv_m.group(1)) if tv_m else 0
-    dup_v_m = re.search(r"Apareado\s+([\d\.]+)", texto)
-    d["ev_duplas"] = limpiar_numero(dup_v_m.group(1)) if dup_v_m else 0
-    big_m = re.search(r"Bigeminismo\s+([\d\.]+)", texto)
-    d["bigeminismo"] = limpiar_numero(big_m.group(1)) if big_m else 0
-
-    esv_m = re.search(r"Latidos supraventriculares\s*:\s*([\d\.]+)", texto)
-    d["esv_total"] = limpiar_numero(esv_m.group(1)) if esv_m else 0
-    tsv_m = re.search(r"\bTSV\s+([\d\.]+)", texto)
-    d["tsv_episodios"] = limpiar_numero(tsv_m.group(1)) if tsv_m else 0
-
-    st_dep = re.search(r"Depresi[óo]n ST\s+(\d+)\s*(-?[\d,\.]*)", texto)
-    st_elev = re.search(r"Elevaci[óo]n ST\s+(\d+)\s*([\d,\.]*)", texto)
-    d["st_dep_episodios"] = int(st_dep.group(1)) if (st_dep and st_dep.group(1) != "0") else 0
-    d["st_dep_mm"] = st_dep.group(2) if (st_dep and st_dep.group(2)) else "1.0"
-    d["st_elev_episodios"] = int(st_elev.group(1)) if (st_elev and st_elev.group(1) != "0") else 0
-    d["st_elev_mm"] = st_elev.group(2) if (st_elev and st_elev.group(2)) else "1.0"
-    d["st_episodios"] = d["st_dep_episodios"] + d["st_elev_episodios"]
-
-    sdnn_m = re.search(r"Valor de 24 horas\s+[\d\.,]+\s+([\d\.,]+)", texto)
-    d["sdnn_24h"] = limpiar_numero(sdnn_m.group(1)) if sdnn_m else 85
-    qtc_m = re.search(r"Todos los per[íi]odos\s+[\d\.,]+\s+[\d\.,]+\s+([\d\.,]+)", texto)
-    d["qtc_prom"] = limpiar_numero(qtc_m.group(1)) if qtc_m else 400
-    eventos_pac_m = re.search(r"Eventos del paciente\s*:\s*(\d+)", texto)
-    d["eventos_paciente"] = int(eventos_pac_m.group(1)) if eventos_pac_m else 0
-    return d
-
-def redactar_informe_holter_11_puntos(d, perfil):
-    p1 = f"1. Ritmo sinusal con frecuencia cardiaca promedio de {d['fc_prom']} latidos por minuto (Diurna: {d['fc_dia']} lpm / Nocturna: {d['fc_noc']} lpm)."
-    crono = []
-    if d["taqui_conteo"] > 0: crono.append(f"{d['taqui_conteo']} episodios de taquicardia sinusal (FC máx. {d['taqui_fc_max']} lpm)")
-    if d["bradi_conteo"] > 0: crono.append(f"{d['bradi_conteo']} episodios de bradicardia sinusal (FC mín. {d['bradi_fc_min']} lpm)")
-    p2 = f"2. Eventos cronotrópicos: Se documentaron {' y '.join(crono)}." if crono else "2. Eventos cronotrópicos: Sin bradicardia patológica ni taquicardias sostenidas de relevancia clínica."
-    p3 = f"3. Intervalos PR normales y QTc prolongado ({d['qtc_prom']} ms)." if d["qtc_prom"] > 460 else f"3. Intervalos PR normales y QTc normales ({d['qtc_prom']} ms)."
-
-    es_isq = (d["st_episodios"] > 0) or any(k in d.get("dx_motivo", "") for k in ["ANGINA", "INFARTO", "ISQUEMIA", "CORONAR", "IAM", "SCA", "NECROSIS", "DOLOR"])
-    p4 = f"4. Alteraciones isquémicas del segmento ST ({d['st_episodios']} episodios)." if es_isq else "4. Sin alteraciones isquémicas del segmento ST."
-    p5 = f"5. Alteración de la conducción AV por {d['latidos_caidos']} latidos caídos." if d["latidos_caidos"] > 0 else "5. Sin Alteración de la conducción AV."
-    tiene_bloqueo = any(k in d.get("dx_motivo", "") for k in ["EPOC", "PULMONAR", "BLOQUEO", "RAMA", "BRD", "BRI", "BCRD", "BCRI", "QRS", "CARDIOPATIA"])
-    p6 = "6. Alteración en la conducción intraventricular por bloqueo completo de rama." if tiene_bloqueo else "6. Sin Alteración en la conducción intraventricular."
-
-    ect = []
-    if d["esv_total"] > 0: ect.append(f"ectopias supraventriculares ({d['esv_total']} ESV)")
-    if d["ev_total"] > 0:
-        det_v = f"ventriculares frecuentes ({d['ev_total']} EV)" if d["ev_total"] >= 50 else f"ventriculares aisladas ({d['ev_total']} EV)"
-        if d["tv_episodios"] > 0: det_v += f" con {d['tv_episodios']} rachas de TV"
-        ect.append(det_v)
-    p7 = f"7. Alteración de los impulsos por {' y '.join(ect)}." if ect else "7. Sin alteración de los impulsos ectópicos de relevancia clínica."
-    p8 = f"8. El paciente refirió síntomas ({d['eventos_paciente']} eventos marcados en diario)." if d["eventos_paciente"] > 0 else "8. No refirió síntomas."
-
-    riesgo = "Riesgo alto" if d["sdnn_24h"] <= 60 else ("Riesgo medio" if d["sdnn_24h"] <= 120 else "Normal")
-    p9 = f"9. Variabilidad Disminuida de la FC." if d["sdnn_24h"] <= 120 else "9. Variabilidad Conservada de la FC."
-    p10 = f"10. Se registraron {d['pausas']} pausas significativas." if d["pausas"] > 0 else "10. No hay pausas significativas."
-    p11 = f"11. Riesgo del paciente SDNN 20 a 24 HRS ({riesgo})."
-
-    diag = f"Ritmo sinusal con FC promedio {d['fc_prom']} lpm. Variabilidad autonómica {riesgo.lower()}."
-    return f"""INTERPRETACIÓN TEST HOLTER - CUPS 895001\n\n{p1}\n{p2}\n{p3}\n{p4}\n{p5}\n{p6}\n{p7}\n{p8}\n{p9}\n{p10}\n{p11}\n\nCONCLUSIÓN DIAGNÓSTICA:\n{diag}\n\n{perfil['nombre_completo']}\n{perfil['especialidad']}\n{perfil['registro']}"""
-
-def extraer_datos_mapa_sentinel(pdf_bytes, filename=""):
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    texto = "".join([p.get_text() + "\n" for p in doc])
-    doc.close()
-
-    d = {}
-    m_nom = re.search(r"Nombre del paciente:\s*([^\n\r\|]+)", texto, re.IGNORECASE) or re.search(r"([A-ZÁÉÍÓÚÑ\s]{3,45},\s*[A-ZÁÉÍÓÚÑ\s]{3,45})", texto)
-    d["paciente"] = m_nom.group(1).replace("\n", " ").strip() if m_nom else "PACIENTE MAPA"
-
-    m_id = re.search(r"ID paciente:\s*([^\n\r\s]+)", texto, re.IGNORECASE)
-    d["cedula"] = m_id.group(1).replace(".", "") if m_id else ""
-
-    p_gen = re.search(r"Resumen general.*?Prom\.?:\s*(\d{2,3})\s*[\/\-]\s*(\d{2,3})\s*mmHg", texto, re.IGNORECASE)
-    d["pas_24h"] = int(p_gen.group(1)) if p_gen else 120
-    d["pad_24h"] = int(p_gen.group(2)) if p_gen else 75
-
-    c_sis = re.search(r"Sist[óo]lico\s*>\s*l[íi]mite\s*:\s*([\d,\.]+)\s*%", texto, re.IGNORECASE)
-    d["carga_pas"] = c_sis.group(1).replace(".", ",") if c_sis else "0,00"
-    c_dia = re.search(r"Diast[óo]lico\s*>\s*l[íi]mite\s*:\s*([\d,\.]+)\s*%", texto, re.IGNORECASE)
-    d["carga_pad"] = c_dia.group(1).replace(".", ",") if c_dia else "0,00"
-
-    pp_m = re.search(r"Presi[óo]n de pulso\s*\(mmHg\)\s*\n?\s*(\d{2,3})", texto, re.IGNORECASE)
-    d["pp_val"] = int(pp_m.group(1)) if pp_m else (d["pas_24h"] - d["pad_24h"])
-
-    caida_m = re.search(r"Sist[óo]lico\s*\(mmHg\)\s*.*?([\d,\.\-]+)\s*%", texto, re.DOTALL)
-    try: d["caida_nocturna_val"] = float(caida_m.group(1).replace(",", ".")) if caida_m else 10.0
-    except: d["caida_nocturna_val"] = 10.0
-
-    m_sueno = re.search(r"Resumen de los per[íi]odos de sue[ñn]o.*?Sist[óo]lico\s*\(mmHg\)\s*\n?\s*(\d+)\s*.*?(\d{2,3})\s*\([^\)]+\)\s*.*?Diast[óo]lico\s*\(mmHg\)\s*\n?\s*(\d+)\s*.*?(\d{2,3})\s*\(", texto, re.DOTALL | re.IGNORECASE)
-    d["pas_max_sueno"] = int(m_sueno.group(2)) if m_sueno else d["pas_24h"]
-    d["pad_max_sueno"] = int(m_sueno.group(4)) if m_sueno else d["pad_24h"]
-    return d
-
-def redactar_informe_mapa_cencardio(d, perfil):
-    p1 = f"1. Promedio de tensión arterial sistólica ({d['pas_24h']} mmHg) y diastolica ({d['pad_24h']} mmHg)"
-    p2 = f"2. Carga tensional sistólica ({d['carga_pas']}%) y diastólica de ({d['carga_pad']}%)"
-    p3 = "3. Presión de pulso normal" if d["pp_val"] <= 60 else f"3. Presión de pulso aumentada ({d['pp_val']} mmHg, rigidez arterial)"
-
-    # Regla Institucional CENCARDIO (Dr. Amaya): Caída > 0% = Dipping positivo
-    patron = "dipping positivo" if d["caida_nocturna_val"] > 0.0 else ("dipping invertido (riser)" if d["caida_nocturna_val"] <= -10.0 else "dipping atenuado")
-    p4 = f"4. Patrón circadiano tensional {patron}"
-
-    p5 = f"5. Se presentaron incrementos de presión durante el sueño (máx. {d['pas_max_sueno']}/{d['pad_max_sueno']} mmHg)." if (d["pas_max_sueno"] >= 145 or d["pad_max_sueno"] >= 95) else "5. No se presentaron incrementos de presión arterial tanto sistólica al acostarse como diastólica durante las 24 horas."
-
-    c_pas = float(d["carga_pas"].replace(",", "."))
-    c_pad = float(d["carga_pad"].replace(",", "."))
-    ctrl = "Control óptimo de la tensión arterial" if (c_pas < 15 and c_pad < 15 and d["pas_24h"] < 130 and d["pad_24h"] < 80) else ("Control subóptimo de la tensión arterial estadio I" if (c_pas <= 30 or c_pad <= 30 or d["pas_24h"] < 140) else "Descontrol de la tensión arterial estadio II")
-    p6 = f"6. {ctrl}"
-
-    return f"""INTERPRETACIÓN TEST MAPA\nHallazgos:\n{p1}\n{p2}\n{p3}\n{p4}\n{p5}\n{p6}\n\n{perfil['nombre_completo']}\n{perfil['especialidad']}\n{perfil['registro']}"""
-
-def calcular_mets_bruce(tiempo_min):
-    if tiempo_min <= 0.1: return 0.0
-    if tiempo_min <= 3.0: return round(1.0 + (tiempo_min / 3.0) * 3.8, 1)
-    if tiempo_min <= 6.0: return round(4.8 + ((tiempo_min - 3.0) / 3.0) * 2.2, 1)
-    if tiempo_min <= 9.0: return round(7.0 + ((tiempo_min - 6.0) / 3.0) * 3.1, 1)
-    if tiempo_min <= 12.0: return round(10.1 + ((tiempo_min - 9.0) / 3.0) * 3.4, 1)
-    if tiempo_min <= 15.0: return round(13.5 + ((tiempo_min - 12.0) / 3.0) * 3.7, 1)
-    return round(17.2 + ((tiempo_min - 15.0) / 3.0) * 3.0, 1)
-
-def redactar_informe_ergometria_institucional(d, perfil):
-    fcm_prev = 220 - d["edad"] if d["edad"] > 0 else 200
-    porc = round((d["fc_pico"] / fcm_prev) * 100) if (fcm_prev > 0 and d["fc_pico"] > 0) else 0
-    suf = "suficiente" if porc >= 85 else "insuficiente"
-    dp = d["fc_pico"] * d["pas_pico"]
-    st_res = "Sin alteraciones isquémicas del segmento ST" if d["st_mm"] < 1.0 else f"Alteraciones de la repolarización con infradesnivel del ST de {d['st_mm']} mm"
-    diag_el = "negativa" if d["st_mm"] < 1.0 else "positiva"
-    dts = d["tiempo_min"] - (5 * d["st_mm"])
-    duke = "Bajo riesgo coronario (< 1% mortalidad anual)" if dts >= 5 else ("Riesgo moderado" if dts >= -10 else "Alto riesgo coronario")
-
-    return f"""INTERPRETACIÓN PRUEBA DE ESFUERZO COMPUTARIZADA - CUPS 893805
-
-1. Ritmo sinusal normal basal y durante todas las etapas del esfuerzo.
-2. Protocolo de {d['protocolo']} completado con duración de {d['tiempo_min']:.2f} minutos ({d['etapa']}).
-3. Capacidad funcional alcanzada: {d['mets']} METs.
-4. Respuesta cronotrópica: FC basal {d['fc_basal']} lpm elevándose hasta FC pico {d['fc_pico']} lpm ({porc}% de la FCM prevista, prueba {suf}).
-5. Respuesta hemodinámica presora: PA basal {d['pas_basal']}/{d['pad_basal']} mmHg alcanzando PA pico {d['pas_pico']}/{d['pad_pico']} mmHg.
-6. Doble producto máximo alcanzado: {dp:,} mmHg*lpm.
-7. Comportamiento electrocardiográfico del ST: {st_res}.
-8. Sin arritmias ventriculares complejas ni eventos supraventriculares sostenidos inducidos por el ejercicio.
-9. Motivo de suspensión: Consecución de frecuencia cardíaca máxima y agotamiento físico voluntario, sin dolor precordial.
-10. Estratificación pronóstica por Duke Treadmill Score: {dts:.1f} ({duke}).
-
-CONCLUSIÓN DIAGNÓSTICA:
-Prueba de esfuerzo {suf}, eléctricamente {diag_el} para isquemia miocárdica inducible. Buena tolerancia hemodinámica y funcional.
-RECOMENDACIONES: {'Continuar manejo médico integral y prescripción de actividad física regular.' if d['st_mm'] < 1.0 else 'Valoración prioritaria por cardiología clínica para estudio funcional o angiografía.'}
-
-{perfil['nombre_completo']}
-{perfil['especialidad']}
-{perfil['registro']}"""
-
-# ==============================================================================
-# INYECCIÓN DE PDFS
-# ==============================================================================
-def inyectar_holter_pdf(pdf_bytes, texto_informe, paciente_nom, perfil, cod_uuid, estampador_activo=False):
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    pagina1 = doc[0]
-    rects_h = pagina1.search_for("Hallazgos:")
-    rects_f = pagina1.search_for("Firma del médico") or pagina1.search_for("Firma del operador")
-
-    y_base = rects_f[0].y0 if rects_f else 740
-    y0 = (rects_h[0].y1 + 4) if rects_h else 545
-    y1 = y_base - 62
-
-    pagina1.draw_rect(fitz.Rect(0, y0, pagina1.rect.width, y1), color=None, fill=(1, 1, 1), overlay=True)
-
-    font_size_optimo = 5.6
-    for fs in [6.2, 5.9, 5.6, 5.3, 5.0, 4.7, 4.4, 4.2]:
-        dt = fitz.open(stream=pdf_bytes, filetype="pdf")
-        rc = dt[0].insert_textbox(fitz.Rect(35, y0, pagina1.rect.width - 36, y1), texto_informe, fontsize=fs, fontname="helv", align=fitz.TEXT_ALIGN_LEFT)
-        dt.close()
-        if rc >= 0:
-            font_size_optimo = fs
-            break
-
-    pagina1.insert_textbox(fitz.Rect(35, y0, pagina1.rect.width - 36, y1), texto_informe, fontsize=font_size_optimo, fontname="helv", color=(0, 0, 0), align=fitz.TEXT_ALIGN_LEFT)
-
-    pagina1.draw_rect(fitz.Rect(220, y_base - 58, pagina1.rect.width, y_base + 12), color=None, fill=(1, 1, 1), overlay=True)
-    qr_bytes = generar_qr_verificacion(paciente_nom, perfil['nombre_completo'], ahora_colombia().strftime("%Y-%m-%d"), cod_uuid, "CUPS 895001")
-    pagina1.insert_image(fitz.Rect(230, y_base - 32, 270, y_base + 8), stream=qr_bytes)
-    pagina1.insert_text(fitz.Point(275, y_base - 18), "Validado Digitalmente", fontsize=5.2, fontname="helv", color=(0.08, 0.2, 0.36))
-    pagina1.insert_text(fitz.Point(275, y_base - 9), "Res. 3100 de 2019 - MinSalud", fontsize=4.7, fontname="helv", color=(0.25, 0.25, 0.25))
-    pagina1.insert_text(fitz.Point(275, y_base), f"Cód: {cod_uuid[:12]}...", fontsize=4.5, fontname="helv", color=(0.4, 0.4, 0.4))
-
-    firma_bytes = procesar_firma_transparente()
-    if firma_bytes and estampador_activo:
-        fx0 = (rects_f[0].x0 + 10) if rects_f else 380
-        pagina1.insert_image(fitz.Rect(fx0, y_base - 58, fx0 + 155, y_base + 4), stream=firma_bytes)
-
-    pix = pagina1.get_pixmap(dpi=130)
-    img_prev = pix.tobytes("png")
-    pdf_out = doc.tobytes()
-    doc.close()
-    return pdf_out, img_prev
-
-def inyectar_mapa_pdf(pdf_bytes, texto_informe, paciente_nom, perfil, cod_uuid, estampador_activo=False):
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    pagina1 = doc[0]
-    rect_m = pagina1.search_for("Presión arterial por la mañana")
-    rect_r = pagina1.search_for("Resumen de todo el registro")
-
-    y0 = (rect_m[0].y1 + 2) if rect_m else 230
-    y1 = (rect_r[0].y0 - 4) if rect_r else 425
-
-    pagina1.draw_rect(fitz.Rect(0, y0, pagina1.rect.width, y1), color=None, fill=(1, 1, 1), overlay=True)
-
-    font_size = 6.4
-    for fs in [7.2, 6.8, 6.4, 6.0, 5.6]:
-        dt = fitz.open(stream=pdf_bytes, filetype="pdf")
-        rc = dt[0].insert_textbox(fitz.Rect(36, y0 + 2, 440, y1 - 2), texto_informe, fontsize=fs, fontname="helv", align=fitz.TEXT_ALIGN_LEFT)
-        dt.close()
-        if rc >= 0:
-            font_size = fs
-            break
-
-    pagina1.insert_textbox(fitz.Rect(36, y0 + 2, 440, y1 - 2), texto_informe, fontsize=font_size, fontname="helv", color=(0, 0, 0), align=fitz.TEXT_ALIGN_LEFT)
-
-    qr_bytes = generar_qr_verificacion(paciente_nom, perfil['nombre_completo'], ahora_colombia().strftime("%Y-%m-%d"), cod_uuid, "CUPS 895003")
-    pagina1.insert_image(fitz.Rect(455, y0 + 6, 505, y0 + 56), stream=qr_bytes)
-    pagina1.insert_text(fitz.Point(510, y0 + 22), "Validado Digitalmente", fontsize=5.0, fontname="helv", color=(0.04, 0.15, 0.25))
-    pagina1.insert_text(fitz.Point(510, y0 + 32), "Res. 3100 MinSalud", fontsize=4.6, fontname="helv", color=(0.3, 0.3, 0.3))
-    pagina1.insert_text(fitz.Point(510, y0 + 42), f"Cód: {cod_uuid[:10]}...", fontsize=4.4, fontname="helv", color=(0.4, 0.4, 0.4))
-
-    firma_bytes = procesar_firma_transparente()
-    if firma_bytes and estampador_activo:
-        pagina1.insert_image(fitz.Rect(445, y0 + 62, 575, y1 - 4), stream=firma_bytes)
-
-    pix = pagina1.get_pixmap(dpi=130)
-    img_prev = pix.tobytes("png")
-    pdf_out = doc.tobytes()
-    doc.close()
-    return pdf_out, img_prev
-
-def generar_pdf_ergometria_completo(d, texto_informe, perfil, cod_uuid, imagenes_adjuntas=[]):
-    doc = fitz.open()
-    page = doc.new_page(width=612, height=792)
-
-    logo_bytes = None
-    for nom in ["cencardio.jpg", "cencardio.png", "cencardio.jpeg", "logo.png", "logo.jpg"]:
-        if os.path.exists(nom):
-            with open(nom, "rb") as f: logo_bytes = f.read()
-            break
-    if logo_bytes:
-        page.insert_image(fitz.Rect(36, 30, 150, 75), stream=logo_bytes)
-
-    page.insert_text(fitz.Point(165, 45), "CENTRO CARDIOVASCULAR COLOMBIANO CENCARDIO", fontsize=11, fontname="helv", color=(0.04, 0.15, 0.25))
-    page.insert_text(fitz.Point(165, 58), "INFORME DE ERGOMETRÍA Y PRUEBA DE ESFUERZO COMPUTARIZADA", fontsize=8.5, fontname="helv", color=(0.78, 0.06, 0.18))
-    page.insert_text(fitz.Point(165, 70), "CUPS: 893805 · Habilitación MinSalud Colombia · Res. 3100 de 2019", fontsize=7, fontname="helv", color=(0.4, 0.45, 0.5))
-    page.draw_rect(fitz.Rect(36, 85, 576, 87), color=None, fill=(0.04, 0.15, 0.25), overlay=True)
-
-    page.draw_rect(fitz.Rect(36, 95, 576, 155), color=(0.85, 0.9, 0.95), fill=(0.97, 0.98, 1.0), width=1)
-    page.insert_text(fitz.Point(46, 112), f"PACIENTE: {d['paciente'].upper()}", fontsize=8.5, fontname="helv", color=(0.04, 0.15, 0.25))
-    page.insert_text(fitz.Point(46, 126), f"DOCUMENTO: {d['cedula']}    |    EDAD: {d['edad']} AÑOS    |    SEXO: {d['sexo']}", fontsize=7.5, fontname="helv", color=(0.2, 0.25, 0.3))
-    page.insert_text(fitz.Point(46, 140), f"FECHA DEL ESTUDIO: {ahora_colombia().strftime('%d/%m/%Y')}    |    MÉDICO LECTOR: {perfil['nombre_completo']}", fontsize=7.5, fontname="helv", color=(0.2, 0.25, 0.3))
-
-    fcm_prev = 220 - d["edad"] if d["edad"] > 0 else 200
-    porc = round((d["fc_pico"] / fcm_prev) * 100) if (fcm_prev > 0 and d["fc_pico"] > 0) else 0
-    cajas = [
-        ("FC PICO ALCANZADA", f"{d['fc_pico']} lpm ({porc}%)"),
-        ("PA ESFUERZO PICO", f"{d['pas_pico']}/{d['pad_pico']} mmHg"),
-        ("CARGA FUNCIONAL", f"{d['mets']} METs ({d['tiempo_min']:.2f} m)"),
-        ("DOBLE PRODUCTO", f"{d['fc_pico']*d['pas_pico']:,}")
-    ]
-    x_offset = 36
-    for tit, val in cajas:
-        rect_m = fitz.Rect(x_offset, 163, x_offset + 130, 203)
-        page.draw_rect(rect_m, color=(0.88, 0.91, 0.94), fill=(1, 1, 1), width=1)
-        page.draw_rect(fitz.Rect(x_offset, 163, x_offset + 130, 166), color=None, fill=(0.04, 0.15, 0.25))
-        page.insert_text(fitz.Point(x_offset + 8, 178), tit, fontsize=5.8, fontname="helv", color=(0.4, 0.45, 0.5))
-        page.insert_text(fitz.Point(x_offset + 8, 195), val, fontsize=8.5, fontname="helv", color=(0.04, 0.15, 0.25))
-        x_offset += 136
-
-    rect_caja = fitz.Rect(36, 215, 576, 680)
-    page.draw_rect(rect_caja, color=(0.88, 0.91, 0.94), fill=(1, 1, 1), width=1)
-    page.insert_textbox(rect_caja, texto_informe, fontsize=6.8, fontname="helv", color=(0.1, 0.15, 0.2), align=fitz.TEXT_ALIGN_LEFT)
-
-    qr_bytes = generar_qr_verificacion(d['paciente'], perfil['nombre_completo'], ahora_colombia().strftime("%Y-%m-%d"), cod_uuid, "CUPS 893805")
-    page.insert_image(fitz.Rect(48, 695, 100, 747), stream=qr_bytes)
-    page.insert_text(fitz.Point(108, 715), "Certificado Digital Forense", fontsize=6.2, fontname="helv", color=(0.04, 0.15, 0.25))
-    page.insert_text(fitz.Point(108, 726), "Res. 3100 de 2019 · Habilitación MinSalud", fontsize=5.5, fontname="helv", color=(0.4, 0.45, 0.5))
-    page.insert_text(fitz.Point(108, 737), f"Cód: {cod_uuid[:16]}...", fontsize=5.2, fontname="helv", color=(0.4, 0.45, 0.5))
-
-    firma_bytes = procesar_firma_transparente()
-    if firma_bytes and perfil["id"] in ["dr.amaya", "admin"]:
-        page.insert_image(fitz.Rect(390, 690, 545, 755), stream=firma_bytes)
-
-    pix = page.get_pixmap(dpi=130)
-    img_preview = pix.tobytes("png")
-
-    if imagenes_adjuntas:
-        for img_file in imagenes_adjuntas:
-            try:
-                p_extra = doc.new_page(width=612, height=792)
-                data_img = img_file.getvalue() if hasattr(img_file, "getvalue") else img_file
-                p_extra.insert_image(fitz.Rect(20, 20, 592, 772), stream=data_img)
-            except Exception: pass
-
-    pdf_bytes = doc.tobytes()
-    doc.close()
-    return pdf_bytes, img_preview
-
 # ==========================================
-# GESTIÓN DEL ENTORNO DE OPERACIÓN
+# ENTORNO DE OPERACIÓN
 # ==========================================
 with st.sidebar:
     logo_data_sidebar = obtener_logo_b64()
@@ -1076,7 +720,6 @@ with st.sidebar:
         cerrar_sesion()
         st.rerun()
 
-# Barra Superior
 estado_nube_txt = "🟢 Nube Supabase Activa" if supabase else "🟡 Almacenamiento Local (SQLite)"
 st.markdown(f"""
     <div class="top-hospital-bar">
@@ -1232,7 +875,6 @@ with tab_procesar:
             cups_actual = st.session_state.cups_actual
             mod_nombre = st.session_state.mod_nombre
 
-            # Métricas
             if tipo_estudio == "HOLTER":
                 m1, m2, m3, m4 = st.columns(4)
                 m1.metric("FC Promedio (24h)", f"{datos['fc_prom']} lpm", f"Día {datos['fc_dia']} | Noche {datos['fc_noc']}")
@@ -1299,9 +941,6 @@ with tab_procesar:
                     st.image(img_preview, caption=f"Página 1 - {nombre_confirmado} ({cups_actual})", use_container_width=True)
                 st.markdown('</div>', unsafe_allow_html=True)
 
-# ==============================================================================
-# PESTAÑA 2: ARCHIVO CLÍNICO Y REPORTES GERENCIALES
-# ==============================================================================
 with tab_historial:
     st.markdown("### 📁 Archivo Clínico Digital & Reportes Gerenciales")
     historial, origen_datos = obtener_historial_servicio()
@@ -1311,7 +950,6 @@ with tab_historial:
     else:
         df_produccion = pd.DataFrame(historial)
 
-        # Generador de Excel gerencial
         col_r1, col_r2 = st.columns([2.5, 1.5])
         with col_r1:
             st.markdown(f"**Total de estudios custodiados ({origen_datos}):** `{len(df_produccion)} procedimientos certificados`")
@@ -1331,7 +969,6 @@ with tab_historial:
 
         st.divider()
 
-        # Filtros de búsqueda
         f1, f2, f3 = st.columns([1.5, 1.2, 1.3])
         with f1: busqueda = st.text_input("🔍 Buscar por paciente o documento:", "")
         with f2:
