@@ -414,25 +414,90 @@ def auditar_coherencia_informe(texto_informe, datos, modalidad):
     return discrepancias
 
 # ==============================================================================
-# MOTOR DE VISIÓN IA MULTIMODAL CON MANEJO DE ERRORES TRANSPARENTE
+# OPTIMIZADOR DE IMÁGENES Y MOTOR DE VISIÓN IA CON AUTODESCUBRIMIENTO DE MODELOS
 # ==============================================================================
+def optimizar_imagen_para_ia(img_bytes, max_dim=1600):
+    img = Image.open(io.BytesIO(img_bytes))
+    img = ImageOps.exif_transpose(img)
+    if img.mode != "RGB":
+        img = img.convert("RGB")
+    w, h = img.size
+    if max(w, h) > max_dim:
+        ratio = max_dim / max(w, h)
+        img = img.resize((int(w * ratio), int(h * ratio)), Image.Resampling.LANCZOS)
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=85, optimize=True)
+    return buf.getvalue()
+
 def ejecutar_extraccion_multimodal(archivos_fotos):
     gemini_key = st.secrets.get("GEMINI_API_KEY", st.secrets.get("gemini_api_key", os.environ.get("GEMINI_API_KEY", "")))
+    gemini_key = str(gemini_key).strip().strip('"').strip("'")
     if not gemini_key:
         return False, "⚠️ No se encontró la variable GEMINI_API_KEY en Streamlit Secrets. Agrégala en Settings -> Secrets."
 
+    # 1. Autodescubrimiento: Consultar qué modelos tiene activos tu clave
+    modelos_disponibles = []
+    url_list = f"https://generativelanguage.googleapis.com/v1beta/models?key={gemini_key}"
+    try:
+        r_list = requests.get(url_list, timeout=10)
+        if r_list.status_code == 200:
+            data_list = r_list.json()
+            for m in data_list.get("models", []):
+                if "generateContent" in m.get("supportedGenerationMethods", []):
+                    nom = m.get("name", "")
+                    if nom and "gemini" in nom.lower():
+                        modelos_disponibles.append(("v1beta", nom))
+    except Exception:
+        pass
+
+    # Priorización inteligente
+    if modelos_disponibles:
+        def score_modelo(item):
+            ver, nom = item
+            n = nom.lower()
+            if "2.5-flash" in n or "2.0-flash" in n: return 0
+            if "flash" in n: return 1
+            if "pro" in n: return 2
+            return 3
+        modelos_disponibles.sort(key=score_modelo)
+    else:
+        # Fallback de compatibilidad
+        modelos_disponibles = [
+            ("v1beta", "models/gemini-2.0-flash"),
+            ("v1beta", "models/gemini-2.5-flash"),
+            ("v1beta", "models/gemini-flash-latest"),
+            ("v1", "models/gemini-2.0-flash"),
+            ("v1", "models/gemini-1.5-flash"),
+            ("v1beta", "models/gemini-pro-latest")
+        ]
+
+    # 2. Armar contenido multimodal con compresión de imágenes
     partes = [
         {
-            "text": """Eres un Cardiólogo especialista en Ergometría computarizada.
-Analiza TODAS las fotografías adjuntas (tiras electrocardiográficas continuas, resúmenes impresos y notas manuscritas en post-it).
-Extrae con rigor absoluto los valores diagnósticos del paciente y devuélvelos EXCLUSIVAMENTE en formato JSON:
+            "text": """Eres un Cardiólogo especialista en Ergometría computarizada del Centro Cardiovascular Colombiano CENCARDIO.
+Analiza con máxima rigurosidad las fotografías adjuntas (trazados continuos de esfuerzo y notas manuscritas en post-it).
+Extrae los siguientes parámetros clínicos exactos:
+- Nombre del paciente en mayúsculas
+- Cédula / PID (solo números)
+- Edad (número entero)
+- Sexo ("Femenino" o "Masculino")
+- Protocolo ("Bruce")
+- Etapa alcanzada (ej: "Etapa 6" o "Etapa 4")
+- Tiempo total en minutos como número decimal (ej: si son 16:14 convierte a 16.23; si son 12:30 a 12.5; si son 9:34 a 9.57)
+- Frecuencia Cardíaca Basal en reposo (FC Basal en lpm)
+- Frecuencia Cardíaca Pico en esfuerzo máximo (FC Pico en lpm)
+- Presión Arterial Basal (PAS y PAD basal en mmHg)
+- Presión Arterial Pico de esfuerzo (PAS y PAD pico en mmHg)
+- Desviación del segmento ST (en mm, ej: 0.0)
+
+Devuelve ÚNICAMENTE un objeto JSON con esta estructura exacta sin comentarios ni texto adicional:
 {
-  "paciente": "Nombre completo del paciente en mayúsculas",
-  "cedula": "Número de cédula o PID sin puntos",
+  "paciente": "KAROL JULIANA SUAREZ FARFAN",
+  "cedula": "1050095219",
   "edad": 17,
   "sexo": "Femenino",
   "protocolo": "Bruce",
-  "etapa": "Etapa alcanzada, ej: Etapa 6",
+  "etapa": "Etapa 6",
   "tiempo_min": 16.23,
   "fc_basal": 91,
   "fc_pico": 194,
@@ -441,43 +506,43 @@ Extrae con rigor absoluto los valores diagnósticos del paciente y devuélvelos 
   "pas_pico": 140,
   "pad_pico": 87,
   "st_mm": 0.0
-}
-Si el tiempo viene en formato mm:ss (ej: 16:14), conviértelo a minutos decimales (16.23).
-Devuelve ÚNICAMENTE el JSON plano sin comentarios ni texto adicional."""
+}"""
         }
     ]
 
     for foto in archivos_fotos:
-        img_bytes = foto.getvalue() if hasattr(foto, "getvalue") else foto
-        b64_img = base64.b64encode(img_bytes).decode('utf-8')
-        ext = getattr(foto, "name", "").lower()
-        mime = "image/png" if ext.endswith(".png") else "image/jpeg"
-        partes.append({
-            "inline_data": {
-                "mime_type": mime,
-                "data": b64_img
-            }
-        })
+        try:
+            raw_b = foto.getvalue() if hasattr(foto, "getvalue") else foto
+            opt_b = optimizar_imagen_para_ia(raw_b, max_dim=1600)
+            b64_img = base64.b64encode(opt_b).decode('utf-8')
+            partes.append({
+                "inline_data": {
+                    "mime_type": "image/jpeg",
+                    "data": b64_img
+                }
+            })
+        except Exception:
+            continue
 
     payload = {
         "contents": [{"parts": partes}],
-        "generationConfig": {"temperature": 0.1, "responseMimeType": "application/json"}
+        "generationConfig": {"temperature": 0.1}
     }
 
-    modelos = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
     ultimo_error = ""
-
-    for modelo in modelos:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:generateContent?key={gemini_key}"
+    for ver, mod_name in modelos_disponibles:
+        clean_name = mod_name if mod_name.startswith("models/") else f"models/{mod_name}"
+        url = f"https://generativelanguage.googleapis.com/{ver}/{clean_name}:generateContent?key={gemini_key}"
         try:
-            resp = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=35)
+            resp = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=40)
             if resp.status_code == 200:
                 res_json = resp.json()
                 raw_text = res_json['candidates'][0]['content']['parts'][0]['text']
-                clean_json = re.sub(r'^```json\s*|^```\s*|```$', '', raw_text.strip(), flags=re.MULTILINE).strip()
+                match = re.search(r'\{.*\}', raw_text, re.DOTALL)
+                clean_json = match.group(0) if match else raw_text.strip()
                 data = json.loads(clean_json)
 
-                # Inyección reactiva directa en el estado de Streamlit
+                # Inyección reactiva directa en la memoria de la app
                 if data.get("paciente"): st.session_state.erg_paciente = str(data["paciente"]).upper()
                 if data.get("cedula"): st.session_state.erg_cedula = str(data["cedula"])
                 if data.get("edad"): st.session_state.erg_edad = int(data["edad"])
@@ -493,11 +558,11 @@ Devuelve ÚNICAMENTE el JSON plano sin comentarios ni texto adicional."""
                     st.session_state.erg_pa_pico = f"{data['pas_pico']}/{data['pad_pico']}"
                 if "st_mm" in data: st.session_state.erg_st_mm = float(data["st_mm"])
 
-                return True, f"Tirillas procesadas con éxito ({modelo}). Datos clínicos cargados."
+                return True, f"Parámetros extraídos con éxito con {clean_name}."
             else:
-                ultimo_error = f"{modelo} respondió HTTP {resp.status_code}: {resp.text[:120]}"
+                ultimo_error = f"{clean_name} ({resp.status_code}): {resp.text[:120]}"
         except Exception as e:
-            ultimo_error = f"{modelo} error de red: {str(e)}"
+            ultimo_error = f"{clean_name} error de red: {str(e)}"
 
     return False, f"No se pudo completar el análisis multimodal. Detalle: {ultimo_error}"
 
@@ -782,7 +847,7 @@ Hallazgos:
 # ==============================================================================
 @st.cache_data
 def generar_qr_verificacion(paciente, medico, fecha_str, codigo_uuid, proc_nombre="CUPS 895001"):
-    url_base = "[https://holtercencardio.streamlit.app/](https://holtercencardio.streamlit.app/)"
+    url_base = "https://holtercencardio.streamlit.app/"
     query_string = urllib.parse.urlencode({
         "val": codigo_uuid[:12],
         "pac": paciente,
@@ -1339,7 +1404,7 @@ with tab_procesar:
             if fotos_esfuerzo:
                 btn_extraer = st.button("⚡ EXTRAER PARÁMETROS CON VISIÓN IA", type="primary", use_container_width=True)
                 if btn_extraer:
-                    with st.spinner("🤖 Analizando fotografías con Google AI Studio..."):
+                    with st.spinner("🤖 Consultando modelos de Google AI Studio y analizando fotografías..."):
                         exito, mensaje = ejecutar_extraccion_multimodal(fotos_esfuerzo)
                         if exito:
                             st.success(mensaje)
@@ -1427,10 +1492,10 @@ with tab_procesar:
                 if p_celular:
                     tel_l = re.sub(r'\D', '', p_celular)
                     if not tel_l.startswith("57") and len(tel_l) == 10: tel_l = "57" + tel_l
-                    url_c = f"[https://holtercencardio.streamlit.app/?val=](https://holtercencardio.streamlit.app/?val=){cod_uuid[:12]}&pac={urllib.parse.quote(p_nombre)}&med={urllib.parse.quote(perfil_activo['nombre_completo'])}&proc=CUPS_893805"
+                    url_c = f"https://holtercencardio.streamlit.app/?val={cod_uuid[:12]}&pac={urllib.parse.quote(p_nombre)}&med={urllib.parse.quote(perfil_activo['nombre_completo'])}&proc=CUPS_893805"
                     msg_w = f"Estimado(a) paciente {p_nombre}, CENCARDIO le hace entrega de su resultado oficial de Prueba de Esfuerzo (CUPS 893805). Puede verificar su autenticidad aquí: {url_c}"
                     st.write("")
-                    st.link_button("📲 ENVIAR RESULTADO POR WHATSAPP", f"[https://wa.me/](https://wa.me/){tel_l}?text={urllib.parse.quote(msg_w)}", use_container_width=True)
+                    st.link_button("📲 ENVIAR RESULTADO POR WHATSAPP", f"https://wa.me/{tel_l}?text={urllib.parse.quote(msg_w)}", use_container_width=True)
 
                 if img_erg_prev:
                     st.divider()
@@ -1541,10 +1606,10 @@ with tab_procesar:
                 if telefono_input:
                     tel_limpio = re.sub(r'\D', '', telefono_input)
                     if not tel_limpio.startswith("57") and len(tel_limpio) == 10: tel_limpio = "57" + tel_limpio
-                    url_cert = f"[https://holtercencardio.streamlit.app/?val=](https://holtercencardio.streamlit.app/?val=){st.session_state.estudio_uuid[:12]}&pac={urllib.parse.quote(nombre_confirmado)}&med={urllib.parse.quote(perfil_activo['nombre_completo'])}&proc={urllib.parse.quote(mod_nombre)}"
+                    url_cert = f"https://holtercencardio.streamlit.app/?val={st.session_state.estudio_uuid[:12]}&pac={urllib.parse.quote(nombre_confirmado)}&med={urllib.parse.quote(perfil_activo['nombre_completo'])}&proc={urllib.parse.quote(mod_nombre)}"
                     msg_wa = f"Estimado(a) paciente {nombre_confirmado}, el Centro Cardiovascular Colombiano CENCARDIO le hace entrega de su resultado oficial de {mod_nombre} ({cups_actual}). Certificado oficial: {url_cert}"
                     st.write("")
-                    st.link_button("📲 ENVIAR RESULTADO OFICIAL POR WHATSAPP", f"[https://wa.me/](https://wa.me/){tel_limpio}?text={urllib.parse.quote(msg_wa)}", use_container_width=True)
+                    st.link_button("📲 ENVIAR RESULTADO OFICIAL POR WHATSAPP", f"https://wa.me/{tel_limpio}?text={urllib.parse.quote(msg_wa)}", use_container_width=True)
 
             with col_preview:
                 st.subheader("👁️ Vista Previa Oficial (Página 1)")
