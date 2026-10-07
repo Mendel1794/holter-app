@@ -38,14 +38,6 @@ try:
 except ImportError:
     SUPABASE_LIB_OK = False
 
-# Importación segura de Tesseract
-try:
-    import pytesseract
-    _ = pytesseract.get_tesseract_version()
-    TESSERACT_DISPONIBLE = True
-except Exception:
-    TESSERACT_DISPONIBLE = False
-
 st.set_page_config(
     page_title="Centro Cardiovascular Colombiano CENCARDIO · Workstation Enterprise",
     page_icon="🫀",
@@ -102,18 +94,6 @@ def cargar_estilos_institucionales():
     .specialist-card {
         background: linear-gradient(135deg, #0a2540 0%, #133863 100%);
         border-radius: 14px; padding: 1.1rem; color: #ffffff; margin-bottom: 1.2rem;
-    }
-    .triage-rojo {
-        background: #fef2f2 !important; border-left: 6px solid #dc2626 !important; color: #991b1b !important;
-        padding: 1rem 1.3rem !important; border-radius: 12px !important; margin-bottom: 1.2rem !important;
-    }
-    .triage-amarillo {
-        background: #fffbeb !important; border-left: 6px solid #d97706 !important; color: #92400e !important;
-        padding: 1rem 1.3rem !important; border-radius: 12px !important; margin-bottom: 1.2rem !important;
-    }
-    .triage-verde {
-        background: #f0fdf4 !important; border-left: 6px solid #16a34a !important; color: #166534 !important;
-        padding: 1rem 1.3rem !important; border-radius: 12px !important; margin-bottom: 1.2rem !important;
     }
     .preview-container {
         border: 2px solid #e2e8f0; border-radius: 14px; background: #ffffff; padding: 8px;
@@ -353,7 +333,7 @@ def buscar_telefono_servicio(cedula):
     return res[0] if res else ""
 
 # ==============================================================================
-# CANDADOS FISIOLÓGICOS Y AUDITOR DE COHERENCIA CLÍNICA
+# AUDITORÍA 1: SANITY CHECKS FISIOLÓGICOS (CANDADOS MATEMÁTICOS)
 # ==============================================================================
 def ejecutar_sanity_checks(modalidad, datos):
     alertas = []
@@ -369,9 +349,9 @@ def ejecutar_sanity_checks(modalidad, datos):
         if fc_max < fc_p:
             bloqueos.append(f"Incongruencia Cronotrópica: FC máxima ({fc_max} lpm) es inferior a la FC promedio ({fc_p} lpm).")
         if fc_min < 30:
-            alertas.append(f"Bradicardia Extrema detectada ({fc_min} lpm). Descarte artefacto.")
+            alertas.append(f"Bradicardia Extrema documentada ({fc_min} lpm). Compruebe ausencia de artefactos de desconexión.")
         if fc_max > 220:
-            alertas.append(f"FC Máxima no fisiológica ({fc_max} lpm). Descarte ruido de señal.")
+            alertas.append(f"Frecuencia Cardíaca Máxima ({fc_max} lpm) atípica. Verifique si corresponde a ruido o taquiarritmia paroxística.")
 
     elif modalidad == "MAPA":
         pas = datos.get("pas_24h", 120)
@@ -379,11 +359,11 @@ def ejecutar_sanity_checks(modalidad, datos):
         cn = datos.get("caida_nocturna_val", 10.0)
 
         if pad >= pas:
-            bloqueos.append(f"Error Hemodinámico: La PAD ({pad} mmHg) es mayor o igual a la PAS ({pas} mmHg).")
+            bloqueos.append(f"Error Hemodinámico Severo: La Presión Diastólica ({pad} mmHg) es igual o mayor a la Sistólica ({pas} mmHg).")
         if (pas - pad) < 20:
-            alertas.append(f"Presión de Pulso patológicamente estrecha ({pas - pad} mmHg).")
+            alertas.append(f"Presión de Pulso patológicamente estrecha ({pas - pad} mmHg). Revise calibración.")
         if cn < -20.0:
-            alertas.append(f"Patrón Riser Severo (Aumento nocturno: {cn:.1f}%). Alto riesgo cerebrovascular.")
+            alertas.append(f"Patrón Riser Extremo (Aumento nocturno de presión: {cn:.1f}%). Riesgo cerebrovascular inminente.")
 
     elif modalidad == "ESFUERZO":
         edad = datos.get("edad", 35)
@@ -395,142 +375,131 @@ def ejecutar_sanity_checks(modalidad, datos):
         if pad_pico >= pas_pico:
             bloqueos.append(f"Incongruencia en Esfuerzo: PAD pico ({pad_pico} mmHg) no puede superar a PAS ({pas_pico} mmHg).")
         if fc_basal >= fc_pico and fc_pico > 0:
-            alertas.append("Respuesta Cronotrópica Paradójica: FC pico es menor o igual a FC basal.")
+            alertas.append("Respuesta Cronotrópica Paradójica: FC pico es inferior o igual a FC basal.")
         fcm_prev = 220 - edad if edad > 0 else 200
         if fc_pico > (fcm_prev * 1.25):
-            alertas.append(f"FC Pico ({fc_pico} lpm) excede el 125% de la FCM máxima ({fcm_prev} lpm).")
+            alertas.append(f"FC Pico ({fc_pico} lpm) excede el 125% de la FCM máxima ({fcm_prev} lpm). Sospecha de taquicardia supraventricular o error de lectura.")
 
     return bloqueos, alertas
 
+# ==============================================================================
+# AUDITORÍA 2: CLINICAL LINTER (COHERENCIA CUANTITATIVA VS TEXTO)
+# ==============================================================================
 def auditar_coherencia_informe(texto_informe, datos, modalidad):
     discrepancias = []
     texto_upper = texto_informe.upper()
 
     if modalidad == "HOLTER":
         if "SIN ALTERACIONES ISQUÉMICAS" in texto_upper and datos.get("st_episodios", 0) > 0:
-            discrepancias.append(f"Texto indica 'Sin isquemia', pero se registraron {datos['st_episodios']} episodios de ST.")
+            discrepancias.append(f"El informe indica 'Sin isquemia', pero se contabilizan {datos['st_episodios']} episodios de desviación del ST.")
         if "TAQUICARDIA VENTRICULAR" in texto_upper and datos.get("tv_episodios", 0) == 0:
-            discrepancias.append("Se menciona 'Taquicardia Ventricular', pero la métrica cuantitativa de TV es 0.")
+            discrepancias.append("Se menciona 'Taquicardia Ventricular' en la redacción, pero el contador numérico de TV es 0.")
 
     elif modalidad == "MAPA":
         if "DIPPING POSITIVO" in texto_upper and datos.get("caida_nocturna_val", 0) <= 0:
-            discrepancias.append(f"Se dictamina 'Dipping Positivo', pero la caída nocturna calculada es {datos.get('caida_nocturna_val', 0):.1f}%.")
+            discrepancias.append(f"El texto dictamina 'Dipping Positivo', pero el cálculo matemático de descenso nocturno es {datos.get('caida_nocturna_val', 0):.1f}%.")
         if "CONTROL ÓPTIMO" in texto_upper and (datos.get("pas_24h", 0) >= 140 or float(str(datos.get("carga_pas", "0")).replace(",", ".")) > 30):
-            discrepancias.append("Se califica 'Control Óptimo', pero el paciente presenta cifras elevadas.")
+            discrepancias.append("Se califica 'Control Óptimo', pero los promedios o cargas tensionales superan el rango de normalidad.")
 
     elif modalidad == "ESFUERZO":
         st_mm = datos.get("st_mm", 0.0)
         if "NEGATIVA PARA ISQUEMIA" in texto_upper and st_mm >= 1.0:
-            discrepancias.append(f"Se concluye 'Prueba Negativa', pero hay infradesnivel significativo del ST de {st_mm} mm.")
+            discrepancias.append(f"Se dictamina prueba 'Negativa para isquemia', pero existe infradesnivel significativo del ST de {st_mm} mm.")
         if "SUFICIENTE" in texto_upper:
             fcm_prev = 220 - datos.get("edad", 35)
             porc = (datos.get("fc_pico", 0) / fcm_prev) * 100 if fcm_prev > 0 else 0
             if porc < 85:
-                discrepancias.append(f"Se describe 'Prueba Suficiente', pero solo alcanzó el {porc:.1f}% de la meta submáxima (≥ 85%).")
+                discrepancias.append(f"Se describe 'Prueba Suficiente', pero el esfuerzo solo alcanzó el {porc:.1f}% de la frecuencia submáxima prevista (meta ≥ 85%).")
 
     return discrepancias
 
 # ==============================================================================
-# MOTOR DE VISIÓN INTELIGENTE: GEMINI 2.5 FLASH MULTIMODAL CON FALLBACK
+# MOTOR DE VISIÓN IA MULTIMODAL CON MANEJO DE ERRORES TRANSPARENTE
 # ==============================================================================
-def extraer_datos_esfuerzo_multimodal(archivos_fotos):
-    datos = {
-        "paciente": "", "cedula": "", "edad": 35, "sexo": "Femenino",
-        "protocolo": "Bruce", "etapa": "Etapa 4", "tiempo_min": 0.0,
-        "fc_basal": 75, "fc_pico": 150, "pas_basal": 120, "pad_basal": 80,
-        "pas_pico": 140, "pad_pico": 85, "st_mm": 0.0, "motor_utilizado": "Manual"
+def ejecutar_extraccion_multimodal(archivos_fotos):
+    gemini_key = st.secrets.get("GEMINI_API_KEY", st.secrets.get("gemini_api_key", os.environ.get("GEMINI_API_KEY", "")))
+    if not gemini_key:
+        return False, "⚠️ No se encontró la variable GEMINI_API_KEY en Streamlit Secrets. Agrégala en Settings -> Secrets."
+
+    partes = [
+        {
+            "text": """Eres un Cardiólogo especialista en Ergometría computarizada.
+Analiza TODAS las fotografías adjuntas (tiras electrocardiográficas continuas, resúmenes impresos y notas manuscritas en post-it).
+Extrae con rigor absoluto los valores diagnósticos del paciente y devuélvelos EXCLUSIVAMENTE en formato JSON:
+{
+  "paciente": "Nombre completo del paciente en mayúsculas",
+  "cedula": "Número de cédula o PID sin puntos",
+  "edad": 17,
+  "sexo": "Femenino",
+  "protocolo": "Bruce",
+  "etapa": "Etapa alcanzada, ej: Etapa 6",
+  "tiempo_min": 16.23,
+  "fc_basal": 91,
+  "fc_pico": 194,
+  "pas_basal": 119,
+  "pad_basal": 70,
+  "pas_pico": 140,
+  "pad_pico": 87,
+  "st_mm": 0.0
+}
+Si el tiempo viene en formato mm:ss (ej: 16:14), conviértelo a minutos decimales (16.23).
+Devuelve ÚNICAMENTE el JSON plano sin comentarios ni texto adicional."""
+        }
+    ]
+
+    for foto in archivos_fotos:
+        img_bytes = foto.getvalue() if hasattr(foto, "getvalue") else foto
+        b64_img = base64.b64encode(img_bytes).decode('utf-8')
+        ext = getattr(foto, "name", "").lower()
+        mime = "image/png" if ext.endswith(".png") else "image/jpeg"
+        partes.append({
+            "inline_data": {
+                "mime_type": mime,
+                "data": b64_img
+            }
+        })
+
+    payload = {
+        "contents": [{"parts": partes}],
+        "generationConfig": {"temperature": 0.1, "responseMimeType": "application/json"}
     }
 
-    if not archivos_fotos:
-        return datos
+    modelos = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+    ultimo_error = ""
 
-    gemini_key = st.secrets.get("GEMINI_API_KEY", os.environ.get("GEMINI_API_KEY", ""))
-
-    if gemini_key:
+    for modelo in modelos:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:generateContent?key={gemini_key}"
         try:
-            partes_contenido = [
-                {
-                    "text": """Eres un Cardiólogo especialista en Ergometría computarizada.
-Analiza las fotografías adjuntas de la tirilla de esfuerzo continuo y notas de enfermería/post-its.
-Extrae con rigor absoluto los siguientes campos y devuélvelos EXCLUSIVAMENTE en formato JSON plano:
-{
-  "paciente": "Nombre completo del paciente o cadena vacía",
-  "cedula": "Número de documento o PID o cadena vacía",
-  "edad": número entero de años o 35 si no aparece,
-  "sexo": "Femenino" o "Masculino",
-  "protocolo": "Bruce",
-  "etapa": "Etapa alcanzada, ej: Etapa 4 o Etapa 6",
-  "tiempo_min": tiempo total del ejercicio en minutos como decimal (ej: 16:14 convierte a 16.23, 12:30 a 12.5),
-  "fc_basal": FC basal de reposo en lpm,
-  "fc_pico": FC máxima alcanzada en esfuerzo en lpm,
-  "pas_basal": PAS de reposo en mmHg,
-  "pad_basal": PAD de reposo en mmHg,
-  "pas_pico": PAS pico de esfuerzo en mmHg,
-  "pad_pico": PAD pico de esfuerzo en mmHg,
-  "st_mm": Desviación máxima del segmento ST en mm (ej: 0.0, 1.0, 1.5)
-}
-No agregues comentarios ni markdown, únicamente el JSON puro."""
-                }
-            ]
-
-            for foto in archivos_fotos:
-                img_bytes = foto.getvalue() if hasattr(foto, "getvalue") else foto
-                b64_img = base64.b64encode(img_bytes).decode('utf-8')
-                mime = "image/png" if getattr(foto, "name", "").endswith("png") else "image/jpeg"
-                partes_contenido.append({
-                    "inlineData": {"mimeType": mime, "data": b64_img}
-                })
-
-            url_api = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={gemini_key}"
-            payload = {
-                "contents": [{"parts": partes_contenido}],
-                "generationConfig": {"temperature": 0.0, "responseMimeType": "application/json"}
-            }
-
-            resp = requests.post(url_api, json=payload, timeout=25)
+            resp = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=35)
             if resp.status_code == 200:
                 res_json = resp.json()
                 raw_text = res_json['candidates'][0]['content']['parts'][0]['text']
-                parsed = json.loads(re.sub(r'```json|```', '', raw_text).strip())
-                for k, v in parsed.items():
-                    if v is not None and v != "":
-                        datos[k] = v
-                datos["motor_utilizado"] = "Inteligencia Artificial Multimodal (Gemini 2.5 Flash)"
-                return datos
-        except Exception:
-            pass
+                clean_json = re.sub(r'^```json\s*|^```\s*|```$', '', raw_text.strip(), flags=re.MULTILINE).strip()
+                data = json.loads(clean_json)
 
-    if TESSERACT_DISPONIBLE:
-        try:
-            texto_acumulado = ""
-            for foto in archivos_fotos:
-                img = Image.open(foto)
-                img = ImageOps.exif_transpose(img)
-                img_gray = img.convert("L")
-                enhancer = ImageEnhance.Contrast(img_gray)
-                img_proc = enhancer.enhance(1.8)
+                # Inyección reactiva directa en el estado de Streamlit
+                if data.get("paciente"): st.session_state.erg_paciente = str(data["paciente"]).upper()
+                if data.get("cedula"): st.session_state.erg_cedula = str(data["cedula"])
+                if data.get("edad"): st.session_state.erg_edad = int(data["edad"])
+                if data.get("sexo") in ["Femenino", "Masculino"]: st.session_state.erg_sexo = data["sexo"]
+                if data.get("protocolo"): st.session_state.erg_protocolo = data["protocolo"]
+                if data.get("etapa"): st.session_state.erg_etapa = str(data["etapa"])
+                if data.get("tiempo_min"): st.session_state.erg_tiempo = float(data["tiempo_min"])
+                if data.get("fc_basal"): st.session_state.erg_fc_basal = int(data["fc_basal"])
+                if data.get("fc_pico"): st.session_state.erg_fc_pico = int(data["fc_pico"])
+                if data.get("pas_basal") and data.get("pad_basal"):
+                    st.session_state.erg_pa_basal = f"{data['pas_basal']}/{data['pad_basal']}"
+                if data.get("pas_pico") and data.get("pad_pico"):
+                    st.session_state.erg_pa_pico = f"{data['pas_pico']}/{data['pad_pico']}"
+                if "st_mm" in data: st.session_state.erg_st_mm = float(data["st_mm"])
 
-                for angulo in [270, 90, 0]:
-                    img_rot = img_proc.rotate(angulo, expand=True) if angulo != 0 else img_proc
-                    txt = pytesseract.image_to_string(img_rot, config="--psm 11")
-                    texto_acumulado += txt + "\n"
+                return True, f"Tirillas procesadas con éxito ({modelo}). Datos clínicos cargados."
+            else:
+                ultimo_error = f"{modelo} respondió HTTP {resp.status_code}: {resp.text[:120]}"
+        except Exception as e:
+            ultimo_error = f"{modelo} error de red: {str(e)}"
 
-            m_nom = re.search(r"Paciente\s*:\s*([A-ZÁÉÍÓÚÑ\s,]{4,40})", texto_acumulado, re.IGNORECASE)
-            if m_nom: datos["paciente"] = m_nom.group(1).replace("\n", " ").strip()
-            m_id = re.search(r"(?:PID|ID|C\.?C\.?)\s*[:\.]?\s*(\d{5,12})", texto_acumulado, re.IGNORECASE)
-            if m_id: datos["cedula"] = m_id.group(1)
-
-            fcs = [int(m.group(1)) for m in re.finditer(r"\bFC\s*[:\.]?\s*(\d{2,3})\b", texto_acumulado, re.IGNORECASE)]
-            if fcs:
-                datos["fc_pico"] = max(fcs)
-                datos["fc_basal"] = min(fcs) if min(fcs) > 40 else 75
-
-            datos["motor_utilizado"] = "OCR Local de Servidor (Tesseract)"
-            return datos
-        except Exception:
-            pass
-
-    return datos
+    return False, f"No se pudo completar el análisis multimodal. Detalle: {ultimo_error}"
 
 # ==============================================================================
 # FÓRMULAS FISIOLÓGICAS DE ESFUERZO (BRUCE CONTINUO)
@@ -559,39 +528,36 @@ def redactar_informe_ergometria_institucional(d, perfil):
     st_res = "Sin alteraciones isquémicas del segmento ST" if d["st_mm"] < 1.0 else f"Alteraciones de la repolarización con infradesnivel del ST de {d['st_mm']} mm"
     diag_el = "negativa" if d["st_mm"] < 1.0 else "positiva"
     dts = d["tiempo_min"] - (5 * d["st_mm"])
-    duke = "Bajo riesgo coronario (< 1% mortalidad anual)" if dts >= 5 else ("Riesgo moderado (1 - 3% mortalidad anual)" if dts >= -10 else "Alto riesgo coronario (> 3% mortalidad anual)")
+    duke = "Bajo riesgo coronario (< 1% mortalidad anual)" if dts >= 5 else ("Riesgo moderado (1 - 3% anual)" if dts >= -10 else "Alto riesgo coronario (> 3% anual)")
 
     return f"""INTERPRETACIÓN PRUEBA DE ESFUERZO COMPUTARIZADA - CUPS 893805
 
-1. Ritmo sinusal normal basal y durante todas las etapas del esfuerzo.
+1. Ritmo sinusal normal basal y durante todas las etapas del esfuerzo físico.
 2. Protocolo de {d['protocolo']} completado con duración de {d['tiempo_min']:.2f} minutos ({d['etapa']}).
 3. Capacidad funcional alcanzada: {d['mets']} METs.
-4. Respuesta cronotrópica: FC basal {d['fc_basal']} lpm elevándose hasta FC pico {d['fc_pico']} lpm ({porc}% de la FCM prevista, prueba {suf}).
-5. Respuesta hemodinámica presora: PA basal {d['pas_basal']}/{d['pad_basal']} mmHg alcanzando PA pico {d['pas_pico']}/{d['pad_pico']} mmHg.
+4. Respuesta cronotrópica: FC basal {d['fc_basal']} lpm elevándose progresivamente hasta FC pico de {d['fc_pico']} lpm ({porc}% de la FCM prevista de {fcm_prev} lpm, prueba {suf}).
+5. Respuesta hemodinámica presora: PA basal {d['pas_basal']}/{d['pad_basal']} mmHg alcanzando PA pico de {d['pas_pico']}/{d['pad_pico']} mmHg.
 6. Doble producto máximo alcanzado: {dp:,} mmHg*lpm.
 7. Comportamiento electrocardiográfico del ST: {st_res}.
-8. Sin arritmias ventriculares complejas ni eventos supraventriculares sostenidos inducidos por el ejercicio.
-9. Motivo de suspensión: Consecución de frecuencia cardíaca máxima y agotamiento físico voluntario, sin dolor precordial.
+8. Sin arritmias ventriculares complejas ni eventos supraventriculares inducidos por el ejercicio.
+9. Motivo de suspensión: Consecución de frecuencia cardíaca submáxima diagnóstica y agotamiento físico voluntario, sin angina.
 10. Estratificación pronóstica por Duke Treadmill Score: {dts:.1f} ({duke}).
 
 CONCLUSIÓN DIAGNÓSTICA:
-Prueba de esfuerzo {suf}, eléctricamente {diag_el} para isquemia miocárdica inducible. Buena tolerancia hemodinámica y funcional.
-RECOMENDACIONES: {'Continuar manejo médico integral y prescripción de actividad física regular.' if d['st_mm'] < 1.0 else 'Valoración prioritaria por cardiología clínica para estudio funcional o angiografía coronaria.'}
+Prueba de esfuerzo física {suf}, eléctricamente {diag_el} para isquemia miocárdica inducible. Adecuada tolerancia funcional y hemodinámica.
+RECOMENDACIONES: {'Continuar control médico periódico y prescripción de actividad física regular.' if d['st_mm'] < 1.0 else 'Valoración prioritaria por cardiología clínica para estudio funcional o angiografía.'}
 
 {perfil['nombre_completo']}
 {perfil['especialidad']}
 {perfil['registro']}"""
 
 # ==============================================================================
-# MOTOR CLÍNICO: HOLTER ECG 24 HORAS (% BURDEN Y ESCALA DE LOWN)
+# MOTOR CLÍNICO: HOLTER ECG 24 HORAS
 # ==============================================================================
 def limpiar_numero(val_str):
-    if not val_str:
-        return 0
-    try:
-        return int(float(str(val_str).replace(".", "").replace(",", ".")))
-    except Exception:
-        return 0
+    if not val_str: return 0
+    try: return int(float(str(val_str).replace(".", "").replace(",", ".")))
+    except Exception: return 0
 
 def extraer_datos_holter(pdf_bytes, filename=""):
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
@@ -748,7 +714,7 @@ CONCLUSIÓN DIAGNÓSTICA:
 {perfil['registro']}"""
 
 # ==============================================================================
-# MOTOR CLÍNICO: MAPA 24 HORAS SENTINEL (ESTÁNDAR CENCARDIO EN 6 PUNTOS)
+# MOTOR CLÍNICO: MAPA 24 HORAS SENTINEL
 # ==============================================================================
 def extraer_datos_mapa_sentinel(pdf_bytes, filename=""):
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
@@ -775,10 +741,8 @@ def extraer_datos_mapa_sentinel(pdf_bytes, filename=""):
     d["pp_val"] = int(pp_m.group(1)) if pp_m else (d["pas_24h"] - d["pad_24h"])
 
     caida_m = re.search(r"Sist[óo]lico\s*\(mmHg\)\s*.*?([\d,\.\-]+)\s*%", texto, re.DOTALL)
-    try:
-        d["caida_nocturna_val"] = float(caida_m.group(1).replace(",", ".")) if caida_m else 10.0
-    except Exception:
-        d["caida_nocturna_val"] = 10.0
+    try: d["caida_nocturna_val"] = float(caida_m.group(1).replace(",", ".")) if caida_m else 10.0
+    except Exception: d["caida_nocturna_val"] = 10.0
 
     m_sueno = re.search(r"Resumen de los per[íi]odos de sue[ñn]o.*?Sist[óo]lico\s*\(mmHg\)\s*\n?\s*(\d+)\s*.*?(\d{2,3})\s*\([^\)]+\)\s*.*?Diast[óo]lico\s*\(mmHg\)\s*\n?\s*(\d+)\s*.*?(\d{2,3})\s*\(", texto, re.DOTALL | re.IGNORECASE)
     d["pas_max_sueno"] = int(m_sueno.group(2)) if m_sueno else d["pas_24h"]
@@ -814,11 +778,11 @@ Hallazgos:
 {perfil['registro']}"""
 
 # ==============================================================================
-# INYECTORES DE PDFS CON CUSTODIA FORENSE QR Y SELLO DIGITAL
+# INYECTORES DE PDFS CON QR FORENSE
 # ==============================================================================
 @st.cache_data
 def generar_qr_verificacion(paciente, medico, fecha_str, codigo_uuid, proc_nombre="CUPS 895001"):
-    url_base = "https://holtercencardio.streamlit.app/"
+    url_base = "[https://holtercencardio.streamlit.app/](https://holtercencardio.streamlit.app/)"
     query_string = urllib.parse.urlencode({
         "val": codigo_uuid[:12],
         "pac": paciente,
@@ -859,8 +823,7 @@ def procesar_firma_transparente():
         tinta.putalpha(alpha)
 
         caja = tinta.getbbox()
-        if caja:
-            tinta = tinta.crop(caja)
+        if caja: tinta = tinta.crop(caja)
 
         buf = io.BytesIO()
         tinta.save(buf, format="PNG")
@@ -1146,7 +1109,7 @@ def generar_excel_avanzado_produccion(df_base):
     return output.getvalue(), "xlsx"
 
 # ==============================================================================
-# PERFILES MÉDICOS OFICIALES & CONTROL DE ACCESO (LOGIN)
+# PERFILES MÉDICOS OFICIALES & CONTROL DE ACCESO
 # ==============================================================================
 LISTA_ESPECIALISTAS = [
     {
@@ -1246,7 +1209,7 @@ if "val" in params:
     st.stop()
 
 # ==============================================================================
-# BARRERA DE AUTENTICACIÓN
+# BARRERA DE LOGIN
 # ==============================================================================
 if not st.session_state.autenticado:
     c_izq, c_cen, c_der = st.columns([1, 1.6, 1])
@@ -1280,7 +1243,7 @@ if not st.session_state.autenticado:
     st.stop()
 
 # ==============================================================================
-# SESIÓN ACTIVA: BARRA LATERAL (SE DEFINE OBLIGATORIAMENTE ANTES DEL CONTENIDO)
+# SESIÓN ACTIVA: BARRA LATERAL
 # ==============================================================================
 perfil_activo = PERFILES_POR_ID[st.session_state.usuario_actual]
 
@@ -1322,7 +1285,7 @@ with st.sidebar:
         cerrar_sesion()
         st.rerun()
 
-# Cabecera Superior en Pantalla Principal
+# Cabecera Superior Principal
 estado_nube_txt = "🟢 Nube Supabase Activa" if supabase else "🟡 Almacenamiento Local (SQLite)"
 st.markdown(f"""
     <div class="top-hospital-bar">
@@ -1344,12 +1307,23 @@ st.markdown(f"""
 tab_procesar, tab_historial = st.tabs(["📥 Procesamiento del Estudio", "📁 Archivo Clínico & Reportes Gerenciales"])
 
 # ==============================================================================
-# PESTAÑA 1: PROCESAMIENTO DEL ESTUDIO
+# PESTAÑA 1: PROCESAMIENTO
 # ==============================================================================
 with tab_procesar:
     if "Esfuerzo" in modalidad_seleccionada:
         st.markdown("#### 🏃 Consola de Emisión de Prueba de Esfuerzo (CUPS 893805)")
-        st.caption("Suba las fotografías del trazado continuo impreso para extracción con Visión IA o complete los parámetros manualmente:")
+        st.caption("Suba las fotografías de la tirilla para extracción automática con Visión IA o complete los campos:")
+
+        # Inicialización de variables reactivas
+        for k, v in [
+            ("erg_paciente", ""), ("erg_cedula", ""), ("erg_edad", 35),
+            ("erg_sexo", "Femenino"), ("erg_protocolo", "Bruce"), ("erg_etapa", "Etapa 4"),
+            ("erg_tiempo", 0.0), ("erg_fc_basal", 75), ("erg_fc_pico", 150),
+            ("erg_pa_basal", "120/80"), ("erg_pa_pico", "160/90"), ("erg_st_mm", 0.0),
+            ("erg_celular", "")
+        ]:
+            if k not in st.session_state:
+                st.session_state[k] = v
 
         col_f1, col_f2 = st.columns([1.2, 1], gap="large")
 
@@ -1363,59 +1337,49 @@ with tab_procesar:
             )
 
             if fotos_esfuerzo:
-                nombres_hash = "".join([f.name for f in fotos_esfuerzo])
-                if st.session_state.get("fotos_erg_procesadas") != nombres_hash:
-                    with st.spinner("Analizando tirillas con Motor de Visión IA Inteligente..."):
-                        datos_ai = extraer_datos_esfuerzo_multimodal(fotos_esfuerzo)
-                        st.session_state.erg_paciente = datos_ai.get("paciente", "")
-                        st.session_state.erg_cedula = datos_ai.get("cedula", "")
-                        st.session_state.erg_edad = datos_ai.get("edad", 35)
-                        st.session_state.erg_sexo = datos_ai.get("sexo", "Femenino")
-                        st.session_state.erg_protocolo = datos_ai.get("protocolo", "Bruce")
-                        st.session_state.erg_etapa = datos_ai.get("etapa", "Etapa 4")
-                        st.session_state.erg_tiempo = float(datos_ai.get("tiempo_min", 0.0))
-                        st.session_state.erg_fc_basal = int(datos_ai.get("fc_basal", 75))
-                        st.session_state.erg_fc_pico = int(datos_ai.get("fc_pico", 150))
-                        st.session_state.erg_pa_basal = f"{datos_ai.get('pas_basal', 120)}/{datos_ai.get('pad_basal', 80)}"
-                        st.session_state.erg_pa_pico = f"{datos_ai.get('pas_pico', 140)}/{datos_ai.get('pad_pico', 85)}"
-                        st.session_state.erg_st_mm = float(datos_ai.get("st_mm", 0.0))
-                        st.session_state.fotos_erg_procesadas = nombres_hash
-
-                        st.toast(f"✅ Análisis completado con {datos_ai.get('motor_utilizado', 'Motor Clínico')}", icon="🤖")
-                        st.rerun()
+                btn_extraer = st.button("⚡ EXTRAER PARÁMETROS CON VISIÓN IA", type="primary", use_container_width=True)
+                if btn_extraer:
+                    with st.spinner("🤖 Analizando fotografías con Google AI Studio..."):
+                        exito, mensaje = ejecutar_extraccion_multimodal(fotos_esfuerzo)
+                        if exito:
+                            st.success(mensaje)
+                            st.rerun()
+                        else:
+                            st.error(mensaje)
 
             st.write("")
-            st.markdown("<b>2. Parámetros Clínicos Extraídos</b>", unsafe_allow_html=True)
+            st.markdown("<b>2. Parámetros Clínicos</b>", unsafe_allow_html=True)
             c1, c2, c3 = st.columns(3)
             with c1:
-                p_nombre = st.text_input("Paciente:", value=st.session_state.get("erg_paciente", ""), placeholder="Nombre completo")
-                p_cedula = st.text_input("Cédula / ID:", value=st.session_state.get("erg_cedula", ""), placeholder="Cédula")
+                p_nombre = st.text_input("Paciente:", key="erg_paciente", placeholder="Nombre completo")
+                p_cedula = st.text_input("Cédula / ID:", key="erg_cedula", placeholder="Cédula")
             with c2:
-                p_edad = st.number_input("Edad:", value=int(st.session_state.get("erg_edad", 35)), min_value=1, max_value=110)
-                idx_sex = 0 if st.session_state.get("erg_sexo", "Femenino") == "Femenino" else 1
-                p_sexo = st.selectbox("Sexo:", ["Femenino", "Masculino"], index=idx_sex)
+                p_edad = st.number_input("Edad:", min_value=1, max_value=110, key="erg_edad")
+                p_sexo = st.selectbox("Sexo:", ["Femenino", "Masculino"], key="erg_sexo")
             with c3:
-                p_protocolo = st.selectbox("Protocolo:", ["Bruce", "Bruce Modificado", "Naughton"], index=0)
-                p_etapa = st.text_input("Etapa alcanzada:", value=st.session_state.get("erg_etapa", ""), placeholder="Ej: Etapa 4")
+                p_protocolo = st.selectbox("Protocolo:", ["Bruce", "Bruce Modificado", "Naughton"], key="erg_protocolo")
+                p_etapa = st.text_input("Etapa alcanzada:", key="erg_etapa", placeholder="Ej: Etapa 6")
 
             c4, c5, c6 = st.columns(3)
             with c4:
-                p_tiempo = st.number_input("Tiempo total (min):", value=float(st.session_state.get("erg_tiempo", 0.0)), step=0.1)
-                mets_calc = calcular_mets_bruce(p_tiempo)
-                p_mets = st.number_input("Capacidad (METs):", value=float(mets_calc), step=0.5)
+                p_tiempo = st.number_input("Tiempo total (min):", step=0.1, key="erg_tiempo")
+                mets_calculados = calcular_mets_bruce(p_tiempo)
+                p_mets = st.number_input("Capacidad (METs):", value=float(mets_calculados), step=0.5)
             with c5:
-                p_fc_basal = st.number_input("FC Basal (lpm):", value=int(st.session_state.get("erg_fc_basal", 75)))
-                p_fc_pico = st.number_input("FC Pico (lpm):", value=int(st.session_state.get("erg_fc_pico", 150)))
+                p_fc_basal = st.number_input("FC Basal (lpm):", key="erg_fc_basal")
+                p_fc_pico = st.number_input("FC Pico (lpm):", key="erg_fc_pico")
             with c6:
-                p_pa_basal = st.text_input("PA Basal (mmHg):", value=st.session_state.get("erg_pa_basal", "120/80"))
-                p_pa_pico = st.text_input("PA Esfuerzo Pico (mmHg):", value=st.session_state.get("erg_pa_pico", "160/90"))
+                p_pa_basal = st.text_input("PA Basal (mmHg):", key="erg_pa_basal")
+                p_pa_pico = st.text_input("PA Esfuerzo Pico (mmHg):", key="erg_pa_pico")
 
             c7, c8 = st.columns(2)
             with c7:
-                p_st_mm = st.number_input("Desviación del ST (mm):", value=float(st.session_state.get("erg_st_mm", 0.0)), step=0.5)
+                p_st_mm = st.number_input("Desviación del ST (mm):", step=0.5, key="erg_st_mm")
             with c8:
-                tel_encontrado = buscar_telefono_servicio(p_cedula) if p_cedula else ""
-                p_celular = st.text_input("Celular (WhatsApp):", value=tel_encontrado)
+                if not st.session_state.erg_celular and p_cedula:
+                    tel_d = buscar_telefono_servicio(p_cedula)
+                    if tel_d: st.session_state.erg_celular = tel_d
+                p_celular = st.text_input("Celular (WhatsApp):", key="erg_celular")
 
         with col_f2:
             st.markdown("<b>3. Diagnóstico Institucional y Certificación</b>", unsafe_allow_html=True)
@@ -1433,17 +1397,14 @@ with tab_procesar:
                 }
 
                 bloqueos, alertas_f = ejecutar_sanity_checks("ESFUERZO", datos_erg)
-                for b in bloqueos:
-                    st.error(f"🛑 {b}")
-                for a in alertas_f:
-                    st.warning(f"⚠️ {a}")
+                for b in bloqueos: st.error(f"🛑 {b}")
+                for a in alertas_f: st.warning(f"⚠️ {a}")
 
                 texto_erg = redactar_informe_ergometria_institucional(datos_erg, perfil_activo)
                 texto_erg_final = st.text_area("Informe Oficial:", value=texto_erg, height=310)
 
                 discrepancias = auditar_coherencia_informe(texto_erg_final, datos_erg, "ESFUERZO")
-                for d_err in discrepancias:
-                    st.info(f"🩺 **Alerta de Auditoría:** {d_err}")
+                for d_err in discrepancias: st.info(f"🩺 **Alerta de Auditoría:** {d_err}")
 
                 cod_uuid = str(uuid.uuid4()).upper()
                 pdf_erg, img_erg_prev = generar_pdf_ergometria_completo(datos_erg, texto_erg_final, perfil_activo, cod_uuid, imagenes_adjuntas=fotos_esfuerzo or [])
@@ -1466,16 +1427,16 @@ with tab_procesar:
                 if p_celular:
                     tel_l = re.sub(r'\D', '', p_celular)
                     if not tel_l.startswith("57") and len(tel_l) == 10: tel_l = "57" + tel_l
-                    url_c = f"https://holtercencardio.streamlit.app/?val={cod_uuid[:12]}&pac={urllib.parse.quote(p_nombre)}&med={urllib.parse.quote(perfil_activo['nombre_completo'])}&proc=CUPS_893805"
+                    url_c = f"[https://holtercencardio.streamlit.app/?val=](https://holtercencardio.streamlit.app/?val=){cod_uuid[:12]}&pac={urllib.parse.quote(p_nombre)}&med={urllib.parse.quote(perfil_activo['nombre_completo'])}&proc=CUPS_893805"
                     msg_w = f"Estimado(a) paciente {p_nombre}, CENCARDIO le hace entrega de su resultado oficial de Prueba de Esfuerzo (CUPS 893805). Puede verificar su autenticidad aquí: {url_c}"
                     st.write("")
-                    st.link_button("📲 ENVIAR RESULTADO POR WHATSAPP", f"https://wa.me/{tel_l}?text={urllib.parse.quote(msg_w)}", use_container_width=True)
+                    st.link_button("📲 ENVIAR RESULTADO POR WHATSAPP", f"[https://wa.me/](https://wa.me/){tel_l}?text={urllib.parse.quote(msg_w)}", use_container_width=True)
 
                 if img_erg_prev:
                     st.divider()
                     st.image(img_erg_prev, caption=f"Página 1 - {p_nombre}", width=680)
             else:
-                st.info("💡 Digite el nombre del paciente o adjunte las fotografías para procesar la prueba de esfuerzo.")
+                st.info("💡 Digite el nombre del paciente o haga clic en 'Extraer Parámetros con Visión IA'.")
 
     # --------------------------------------------------------------------------
     # MODALIDADES DIGITALES: HOLTER ECG O MAPA SENTINEL
@@ -1520,12 +1481,9 @@ with tab_procesar:
             mod_nombre = st.session_state.mod_nombre
 
             bloqueos, alertas_f = ejecutar_sanity_checks(tipo_estudio, datos)
-            for b in bloqueos:
-                st.error(f"🛑 {b}")
-            for a in alertas_f:
-                st.warning(f"⚠️ {a}")
+            for b in bloqueos: st.error(f"🛑 {b}")
+            for a in alertas_f: st.warning(f"⚠️ {a}")
 
-            # Métricas Principales
             if tipo_estudio == "HOLTER":
                 m1, m2, m3, m4 = st.columns(4)
                 m1.metric("FC Promedio (24h)", f"{datos['fc_prom']} lpm", f"Día {datos['fc_dia']} | Noche {datos['fc_noc']}")
@@ -1556,8 +1514,7 @@ with tab_procesar:
                 informe_para_grabar = st.text_area("Texto oficial para inyectar en el reporte final:", value=st.session_state.texto_informe, height=360)
 
                 discrepancias = auditar_coherencia_informe(informe_para_grabar, datos, tipo_estudio)
-                for d_err in discrepancias:
-                    st.info(f"🩺 **Alerta de Auditoría:** {d_err}")
+                for d_err in discrepancias: st.info(f"🩺 **Alerta de Auditoría:** {d_err}")
 
                 debe_estampar = perfil_activo["id"] in ["dr.amaya", "admin"]
 
@@ -1584,10 +1541,10 @@ with tab_procesar:
                 if telefono_input:
                     tel_limpio = re.sub(r'\D', '', telefono_input)
                     if not tel_limpio.startswith("57") and len(tel_limpio) == 10: tel_limpio = "57" + tel_limpio
-                    url_cert = f"https://holtercencardio.streamlit.app/?val={st.session_state.estudio_uuid[:12]}&pac={urllib.parse.quote(nombre_confirmado)}&med={urllib.parse.quote(perfil_activo['nombre_completo'])}&proc={urllib.parse.quote(mod_nombre)}"
+                    url_cert = f"[https://holtercencardio.streamlit.app/?val=](https://holtercencardio.streamlit.app/?val=){st.session_state.estudio_uuid[:12]}&pac={urllib.parse.quote(nombre_confirmado)}&med={urllib.parse.quote(perfil_activo['nombre_completo'])}&proc={urllib.parse.quote(mod_nombre)}"
                     msg_wa = f"Estimado(a) paciente {nombre_confirmado}, el Centro Cardiovascular Colombiano CENCARDIO le hace entrega de su resultado oficial de {mod_nombre} ({cups_actual}). Certificado oficial: {url_cert}"
                     st.write("")
-                    st.link_button("📲 ENVIAR RESULTADO OFICIAL POR WHATSAPP", f"https://wa.me/{tel_limpio}?text={urllib.parse.quote(msg_wa)}", use_container_width=True)
+                    st.link_button("📲 ENVIAR RESULTADO OFICIAL POR WHATSAPP", f"[https://wa.me/](https://wa.me/){tel_limpio}?text={urllib.parse.quote(msg_wa)}", use_container_width=True)
 
             with col_preview:
                 st.subheader("👁️ Vista Previa Oficial (Página 1)")
