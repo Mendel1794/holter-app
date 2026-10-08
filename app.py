@@ -1,5 +1,5 @@
 import streamlit as st
-import fitz  # PyMuPDF: motor C++ de renderizado ultrarrápido y extracción espacial
+import fitz  # PyMuPDF: motor C++ ultrarrápido
 from PIL import Image, ImageOps, ImageEnhance
 import qrcode
 import re
@@ -16,7 +16,7 @@ import uuid
 import urllib.parse
 import requests
 
-# Configuración estricta de Zona Horaria de Colombia (UTC-5)
+# Zona Horaria de Colombia (UTC-5)
 TZ_COLOMBIA = timezone(timedelta(hours=-5))
 
 def ahora_colombia():
@@ -108,7 +108,7 @@ def cargar_estilos_institucionales():
     .triage-verde {
         background: #f0fdf4 !important; border-left: 6px solid #16a34a !important; color: #166534 !important;
         padding: 1rem 1.3rem !important; border-radius: 12px !important; margin-bottom: 1.2rem !important;
-        box-shadow: 0 4px 12px rgba(220, 38, 38, 0.08);
+        box-shadow: 0 4px 12px rgba(22, 163, 74, 0.08);
     }
     .preview-container {
         border: 2px solid #e2e8f0; border-radius: 14px; background: #ffffff; padding: 8px;
@@ -124,7 +124,7 @@ def cargar_estilos_institucionales():
 st.markdown(cargar_estilos_institucionales(), unsafe_allow_html=True)
 
 # ==============================================================================
-# BASE DE DATOS LOCAL INCONDICIONAL (RESPALDO GARANTIZADO)
+# BASE DE DATOS LOCAL INCONDICIONAL (BLINDAJE DE PERSISTENCIA)
 # ==============================================================================
 def init_db_local():
     conn = sqlite3.connect("historial_cencardio.db")
@@ -172,7 +172,7 @@ def init_db_local():
 init_db_local()
 
 # ==============================================================================
-# CONECTOR DE NUBE: SUPABASE CON DESINFECCIÓN AUTOMÁTICA DE URL
+# CONECTOR DE NUBE PERSISTENTE: SUPABASE CON DESINFECCIÓN DE RUTA
 # ==============================================================================
 @st.cache_resource
 def obtener_cliente_supabase():
@@ -843,7 +843,6 @@ def extraer_datos_holter_motor_1(texto):
     fc_noc = re.search(r"Noche.*?Prom\.?\s*(\d{2,3})", texto)
     d["fc_noc"] = int(fc_noc.group(1)) if fc_noc else max(45, int(d["fc_prom"] * 0.90))
 
-    # Lectura de la tabla de latidos de Pathfinder SL
     m_conteo_fila = re.search(r"Latidos[^\n\r]*\n[^\n\r]*Conteo\s+([\d\.]+)\s+([\d\.]+)\s+\d+%\s+([\d\.]+)[^\n\r]*\s+([\d\.]+)[^\n\r]*\s+([\d\.]+)\s+(\d+)?%", texto, re.IGNORECASE)
     if m_conteo_fila:
         d["total_latidos"] = limpiar_numero(m_conteo_fila.group(1))
@@ -986,11 +985,11 @@ def ejecutar_triple_engine_holter(pdf_bytes, filename=""):
     texto_completo = "".join([f"\n--- PÁGINA {i+1} DE {total_pags} ---\n" + p.get_text() + "\n" for i, p in enumerate(doc)])
     d_m1 = extraer_datos_holter_motor_1(texto_completo)
 
-    # MOTOR 2: Renderizado dinámico del 100% de las páginas (0 a N-1)
+    # MOTOR 2: Renderizado optimizado del 100% de las páginas (0 a N-1)
     inline_todas_las_paginas = []
     for num_p in range(total_pags):
         try:
-            pix = doc[num_p].get_pixmap(dpi=110)
+            pix = doc[num_p].get_pixmap(dpi=75)
             img_b = pix.tobytes("jpeg")
             b64_p = base64.b64encode(img_b).decode("utf-8")
             inline_todas_las_paginas.append({
@@ -1823,414 +1822,4 @@ estado_nube_txt = "🟢 Nube Supabase Activa" if supabase else "🟡 Almacenamie
 st.markdown(f"""
     <div class="top-hospital-bar">
         <div>
-            <div style="font-size: 1.35rem; font-weight: 800; color: #0a2540; line-height: 1.2;">
-                CENTRO CARDIOVASCULAR COLOMBIANO CENCARDIO
-            </div>
-            <div style="font-size: 0.82rem; font-weight: 700; color: #c8102e; text-transform: uppercase;">
-                Estación Diagnóstica de Cardiología No Invasiva · Alta Complejidad
-            </div>
-        </div>
-        <div style="display:flex; gap:8px;">
-            <span class="inst-badge-success">{estado_nube_txt}</span>
-            <span class="inst-badge-primary">Habilitación MinSalud · Res. 3100</span>
-        </div>
-    </div>
-""", unsafe_allow_html=True)
-
-tab_procesar, tab_historial = st.tabs(["📥 Procesamiento del Estudio", "📁 Archivo Clínico & Reportes Gerenciales"])
-
-# ==============================================================================
-# PESTAÑA 1: PROCESAMIENTO
-# ==============================================================================
-with tab_procesar:
-    if "Esfuerzo" in modalidad_seleccionada:
-        st.markdown("#### 🏃 Consola de Emisión de Prueba de Esfuerzo (CUPS 893805)")
-        st.caption("Suba las fotografías de la tirilla continua para extracción con Visión IA o complete los campos:")
-
-        for k, v in [
-            ("erg_paciente", ""), ("erg_cedula", ""), ("erg_edad", 35),
-            ("erg_sexo", "Femenino"), ("erg_protocolo", "Bruce"), ("erg_etapa", "Etapa 4"),
-            ("erg_tiempo", 0.0), ("erg_fc_basal", 75), ("erg_fc_pico", 150),
-            ("erg_pa_basal", "120/80"), ("erg_pa_pico", "160/90"), ("erg_st_mm", 0.0),
-            ("erg_celular", "")
-        ]:
-            if k not in st.session_state:
-                st.session_state[k] = v
-
-        col_f1, col_f2 = st.columns([1.2, 1], gap="large")
-
-        with col_f1:
-            st.markdown("<b>1. Captura y Análisis de Trazados Impresos</b>", unsafe_allow_html=True)
-            fotos_esfuerzo = st.file_uploader(
-                "📸 Subir fotos o escaneos de las tiras de la banda (JPG o PNG):",
-                type=["jpg", "jpeg", "png"],
-                accept_multiple_files=True,
-                key="uploader_fotos_erg"
-            )
-
-            if fotos_esfuerzo:
-                btn_extraer = st.button("⚡ EXTRAER PARÁMETROS CON VISIÓN IA", type="primary", use_container_width=True)
-                if btn_extraer:
-                    with st.spinner("🤖 Consultando modelos de Google AI Studio y analizando fotografías..."):
-                        exito, mensaje = ejecutar_extraccion_multimodal(fotos_esfuerzo)
-                        if exito:
-                            st.success(mensaje)
-                            st.rerun()
-                        else:
-                            st.error(mensaje)
-
-            st.write("")
-            st.markdown("<b>2. Parámetros Clínicos Extraídos</b>", unsafe_allow_html=True)
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                p_nombre = st.text_input("Paciente:", key="erg_paciente", placeholder="Nombre completo")
-                p_cedula = st.text_input("Cédula / ID:", key="erg_cedula", placeholder="Cédula")
-            with c2:
-                p_edad = st.number_input("Edad:", min_value=1, max_value=110, key="erg_edad")
-                p_sexo = st.selectbox("Sexo:", ["Femenino", "Masculino"], key="erg_sexo")
-            with c3:
-                p_protocolo = st.selectbox("Protocolo:", ["Bruce", "Bruce Modificado", "Naughton"], key="erg_protocolo")
-                p_etapa = st.text_input("Etapa alcanzada:", key="erg_etapa", placeholder="Ej: Etapa 6")
-
-            c4, c5, c6 = st.columns(3)
-            with c4:
-                p_tiempo = st.number_input("Tiempo total (min):", step=0.1, key="erg_tiempo")
-                mets_calculados = calcular_mets_bruce(p_tiempo)
-                p_mets = st.number_input("Capacidad (METs):", value=float(mets_calculados), step=0.5)
-            with c5:
-                p_fc_basal = st.number_input("FC Basal (lpm):", key="erg_fc_basal")
-                p_fc_pico = st.number_input("FC Pico (lpm):", key="erg_fc_pico")
-            with c6:
-                p_pa_basal = st.text_input("PA Basal (mmHg):", key="erg_pa_basal")
-                p_pa_pico = st.text_input("PA Esfuerzo Pico (mmHg):", key="erg_pa_pico")
-
-            c7, c8 = st.columns(2)
-            with c7:
-                p_st_mm = st.number_input("Desviación del ST (mm):", step=0.5, key="erg_st_mm")
-            with c8:
-                if not st.session_state.erg_celular and p_cedula:
-                    tel_d = buscar_telefono_servicio(p_cedula)
-                    if tel_d:
-                        st.session_state.erg_celular = tel_d
-                p_celular = st.text_input("Celular (WhatsApp):", key="erg_celular")
-
-        with col_f2:
-            st.markdown("<b>3. Diagnóstico Institucional y Certificación</b>", unsafe_allow_html=True)
-
-            if p_nombre.strip():
-                pas_b, pad_b = [int(x) for x in p_pa_basal.split("/")] if "/" in p_pa_basal else (120, 80)
-                pas_p, pad_p = [int(x) for x in p_pa_pico.split("/")] if "/" in p_pa_pico else (150, 90)
-
-                datos_erg = {
-                    "paciente": p_nombre, "cedula": p_cedula, "edad": p_edad, "sexo": p_sexo,
-                    "protocolo": p_protocolo, "etapa": p_etapa or "Final", "tiempo_min": p_tiempo,
-                    "mets": p_mets, "fc_basal": p_fc_basal, "fc_pico": p_fc_pico,
-                    "pas_basal": pas_b, "pad_basal": pad_b, "pas_pico": pas_p, "pad_pico": pad_p,
-                    "st_mm": p_st_mm
-                }
-
-                mostrar_semaforizacion_clinica("ESFUERZO", datos_erg)
-
-                bloqueos, alertas_f = ejecutar_sanity_checks("ESFUERZO", datos_erg)
-                for b in bloqueos:
-                    st.error(f"🛑 {b}")
-                for a in alertas_f:
-                    st.warning(f"⚠️ {a}")
-
-                texto_erg = redactar_informe_ergometria_institucional(datos_erg, perfil_activo)
-                texto_erg_final = st.text_area("Informe Oficial:", value=texto_erg, height=310)
-
-                discrepancias = auditar_coherencia_informe(texto_erg_final, datos_erg, "ESFUERZO")
-                for d_err in discrepancias:
-                    st.info(f"🩺 **Alerta de Auditoría:** {d_err}")
-
-                cod_uuid = str(uuid.uuid4()).upper()
-                pdf_erg, img_erg_prev = generar_pdf_ergometria_completo(datos_erg, texto_erg_final, perfil_activo, cod_uuid, imagenes_adjuntas=fotos_esfuerzo or [])
-
-                b1, b2 = st.columns(2)
-                with b1:
-                    st.download_button(
-                        label="📄 DESCARGAR CERTIFICADO",
-                        data=pdf_erg,
-                        file_name=f"{normalizar_nombre_archivo(p_nombre)}_Prueba_Esfuerzo.pdf",
-                        mime="application/pdf",
-                        type="primary",
-                        use_container_width=True
-                    )
-                with b2:
-                    if st.button("💾 Guardar en Archivo Clínico", use_container_width=True):
-                        guardar_estudio_servicio(p_nombre, "Prueba de Esfuerzo", "CUPS 893805", f"FC Pico: {p_fc_pico} | {p_mets} METs", perfil_activo['nombre_completo'], texto_erg_final, pdf_erg, cod_uuid)
-                        st.success(f"✅ Guardado en archivo clínico: {p_nombre}")
-
-                if p_celular:
-                    tel_l = re.sub(r'\D', '', p_celular)
-                    if not tel_l.startswith("57") and len(tel_l) == 10:
-                        tel_l = "57" + tel_l
-                    url_c = f"https://holtercencardio.streamlit.app/?val={cod_uuid[:12]}&pac={urllib.parse.quote(p_nombre)}&med={urllib.parse.quote(perfil_activo['nombre_completo'])}&proc=CUPS_893805"
-                    msg_w = f"Estimado(a) paciente {p_nombre}, CENCARDIO le hace entrega de su resultado oficial de Prueba de Esfuerzo (CUPS 893805). Puede verificar su autenticidad aquí: {url_c}"
-                    st.write("")
-                    st.link_button("📲 ENVIAR RESULTADO POR WHATSAPP", f"https://wa.me/{tel_l}?text={urllib.parse.quote(msg_w)}", use_container_width=True)
-
-                if img_erg_prev:
-                    st.divider()
-                    st.image(img_erg_prev, caption=f"Página 1 - {p_nombre}", width=680)
-            else:
-                st.info("💡 Digite el nombre del paciente o haga clic en 'Extraer Parámetros con Visión IA'.")
-
-    # --------------------------------------------------------------------------
-    # MODALIDADES DIGITALES: HOLTER ECG O MAPA SENTINEL
-    # --------------------------------------------------------------------------
-    else:
-        st.markdown(f"#### 📥 Cargar Estudio Digital ({modalidad_seleccionada})")
-        uploaded_file = st.file_uploader("Seleccione el archivo PDF del estudio:", type=["pdf"])
-
-        if uploaded_file is not None:
-            bytes_originales = uploaded_file.getvalue()
-
-            if "archivo_cargado_nombre" not in st.session_state or st.session_state.archivo_cargado_nombre != uploaded_file.name:
-                with st.spinner("🤖 Ejecutando Auditoría Triple Engine (Extractor C++ + IA Multimodal Visual + Fisiología Simbólica)..."):
-                    tipo_real = detectar_tipo_documento_clinico(bytes_originales)
-
-                    if tipo_real == "HOLTER":
-                        d_act = ejecutar_triple_engine_holter(bytes_originales, uploaded_file.name)
-                        txt_inf = redactar_informe_holter_11_puntos(d_act, perfil_activo)
-                        cups_det = "CUPS 895001"
-                        mod_det = "Holter ECG 24 Horas"
-                        p_clave = f"FC {d_act['fc_prom']} | SDNN {d_act['sdnn_24h']}ms"
-                    else:
-                        d_act = extraer_datos_mapa_sentinel(bytes_originales, uploaded_file.name)
-                        txt_inf = redactar_informe_mapa_cencardio(d_act, perfil_activo)
-                        cups_det = "CUPS 895003"
-                        mod_det = "MAPA Tensional 24 Horas"
-                        p_clave = f"PA 24h: {d_act['pas_24h']}/{d_act['pad_24h']} mmHg (PAM {d_act['pam_24h']})"
-
-                    st.session_state.tipo_detectado = tipo_real
-                    st.session_state.cups_actual = cups_det
-                    st.session_state.mod_nombre = mod_det
-                    st.session_state.datos_actuales = d_act
-                    st.session_state.texto_informe = txt_inf
-                    st.session_state.param_clave = p_clave
-                    st.session_state.archivo_cargado_nombre = uploaded_file.name
-                    st.session_state.estudio_uuid = str(uuid.uuid4()).upper()
-                    st.session_state.telefono_paciente = buscar_telefono_servicio(d_act.get("cedula", ""))
-
-                    motor_info = d_act.get("motores_info", "Triple Engine Audit")
-                    st.toast(f"✅ {motor_info}", icon="🫀")
-
-            datos = st.session_state.datos_actuales
-            tipo_estudio = st.session_state.tipo_detectado
-            cups_actual = st.session_state.cups_actual
-            mod_nombre = st.session_state.mod_nombre
-
-            # 1. SEMAFORIZACIÓN VISUAL
-            mostrar_semaforizacion_clinica(tipo_estudio, datos)
-
-            # 2. PANEL DE AUDITORÍA Y ARBITRAJE TRIPLE ENGINE
-            if tipo_estudio == "HOLTER" and datos.get("triple_engine_activo"):
-                notas_arb = datos.get("notas_arbitraje", [])
-                with st.expander("🛡️ NÚCLEO TRIPLE ENGINE: QUÓRUM Y ARBITRAJE CLÍNICO (3 MOTORES DELIBERANDO)", expanded=bool(notas_arb)):
-                    c_m1, c_m2, c_m3 = st.columns(3)
-                    with c_m1:
-                        st.markdown("**Motor 1: Extractor C++**")
-                        st.caption("Lectura tabular binaria y espacial.")
-                        st.write("🟢 Tablas de latidos validadas")
-                    with c_m2:
-                        st.markdown("**Motor 2: IA Multimodal**")
-                        st.caption("Visión directa de todas las páginas y tiras.")
-                        st.write("🟢 Detección visual de espículas y morfología")
-                    with c_m3:
-                        st.markdown("**Motor 3: Fisiología Simbólica**")
-                        st.caption("Reglas formales del Dr. Amaya.")
-                        st.write("🟢 Ley de conservación y candado RR")
-
-                    if not notas_arb:
-                        st.success("✅ **CONSENSO TOTAL (3 DE 3):** Los tres motores coincidieron de manera unánime en todas las métricas fisiológicas y arritmias.")
-                    else:
-                        st.warning("⚠️ **ARBITRAJE DE SEGURIDAD APLICADO:** El Motor 3 resolvió discrepancias mediante reglas fisiológicas duras:")
-                        for n in notas_arb:
-                            st.write(f"• {n}")
-
-            # 3. CANDADOS FISIOLÓGICOS (SANITY CHECKS)
-            bloqueos, alertas_f = ejecutar_sanity_checks(tipo_estudio, datos)
-            for b in bloqueos:
-                st.error(f"🛑 {b}")
-            for a in alertas_f:
-                st.warning(f"⚠️ {a}")
-
-            # 4. MÉTRICAS CLAVE
-            if tipo_estudio == "HOLTER":
-                m1, m2, m3, m4 = st.columns(4)
-                m1.metric("FC Promedio (24h)", f"{datos['fc_prom']} lpm", f"Día {datos['fc_dia']} | Noche {datos['fc_noc']}")
-                m2.metric("Ectopias Ventriculares", f"{datos['ev_total']} EV", f"TV: {datos['tv_episodios']}")
-                m3.metric("Ectopias Supraventriculares", f"{datos['esv_total']} ESV", f"TSV: {datos['tsv_episodios']}")
-                
-                if datos.get("mcp_presente", False):
-                    m4.metric("Marcapasos (MCP)", f"{datos.get('mcp_porcentaje', 0):.1f}%", f"{datos.get('mcp_latidos', 0)} latidos")
-                else:
-                    m4.metric("SDNN (24 Horas)", f"{datos['sdnn_24h']} ms", f"ST: {datos['st_episodios']} ep.")
-                st.plotly_chart(generar_grafica_tacograma(datos), use_container_width=True)
-            else:
-                m1, m2, m3, m4 = st.columns(4)
-                m1.metric("Promedio 24 Horas", f"{datos['pas_24h']}/{datos['pad_24h']} mmHg", f"PAM: {datos['pam_24h']} mmHg")
-                m2.metric("Carga Sistólica", f"{datos['carga_pas']}%", "Normal < 15%")
-                m3.metric("Carga Diastólica", f"{datos['carga_pad']}%", "Normal < 15%")
-                m4.metric("Presión de Pulso", f"{datos['pp_val']} mmHg", "Meta <= 60")
-
-            st.divider()
-
-            col_edicion, col_preview = st.columns([1, 1], gap="large")
-            with col_edicion:
-                c_nom, c_ced = st.columns([1.8, 1.2])
-                with c_nom:
-                    nombre_confirmado = st.text_input("👤 Paciente:", value=datos['paciente'])
-                with c_ced:
-                    cedula_confirmada = st.text_input("🪪 Cédula / ID:", value=datos.get('cedula', ''))
-
-                tel_actual = st.session_state.get("telefono_paciente", "")
-                telefono_input = st.text_input("📱 Celular (WhatsApp):", value=tel_actual)
-                paciente_nombre_archivo = normalizar_nombre_archivo(nombre_confirmado)
-
-                st.subheader(f"📝 Informe Oficial ({cups_actual})")
-                informe_para_grabar = st.text_area("Texto oficial para inyectar en el reporte final:", value=st.session_state.texto_informe, height=360)
-
-                discrepancias = auditar_coherencia_informe(informe_para_grabar, datos, tipo_estudio)
-                for d_err in discrepancias:
-                    st.info(f"🩺 **Alerta de Auditoría:** {d_err}")
-
-                debe_estampar = perfil_activo["id"] in ["dr.amaya", "admin"]
-
-                if tipo_estudio == "HOLTER":
-                    pdf_final, img_preview = inyectar_holter_pdf(bytes_originales, informe_para_grabar, nombre_confirmado, perfil_activo, st.session_state.estudio_uuid, estampador_activo=debe_estampar)
-                else:
-                    pdf_final, img_preview = inyectar_mapa_pdf(bytes_originales, informe_para_grabar, nombre_confirmado, perfil_activo, st.session_state.estudio_uuid, estampador_activo=debe_estampar)
-
-                col_btn1, col_btn2 = st.columns([1, 1])
-                with col_btn1:
-                    st.download_button(
-                        label=f"📄 DESCARGAR {cups_actual} FIRMADO",
-                        data=pdf_final,
-                        file_name=f"{paciente_nombre_archivo}_{cups_actual.replace(' ', '_')}.pdf",
-                        mime="application/pdf",
-                        type="primary",
-                        use_container_width=True
-                    )
-                with col_btn2:
-                    if st.button("💾 Guardar en Archivo Clínico", use_container_width=True):
-                        exito, mensaje = guardar_estudio_servicio(nombre_confirmado, mod_nombre, cups_actual, st.session_state.param_clave, perfil_activo['nombre_completo'], informe_para_grabar, pdf_final, st.session_state.estudio_uuid)
-                        if exito:
-                            st.success(f"✅ {mensaje}")
-                        else:
-                            st.error(f"❌ {mensaje}")
-
-                if telefono_input:
-                    tel_limpio = re.sub(r'\D', '', telefono_input)
-                    if not tel_limpio.startswith("57") and len(tel_limpio) == 10:
-                        tel_limpio = "57" + tel_limpio
-                    url_cert = f"https://holtercencardio.streamlit.app/?val={st.session_state.estudio_uuid[:12]}&pac={urllib.parse.quote(nombre_confirmado)}&med={urllib.parse.quote(perfil_activo['nombre_completo'])}&proc={urllib.parse.quote(mod_nombre)}"
-                    msg_wa = f"Estimado(a) paciente {nombre_confirmado}, el Centro Cardiovascular Colombiano CENCARDIO le hace entrega de su resultado oficial de {mod_nombre} ({cups_actual}). Certificado oficial: {url_cert}"
-                    st.write("")
-                    st.link_button("📲 ENVIAR RESULTADO OFICIAL POR WHATSAPP", f"https://wa.me/{tel_limpio}?text={urllib.parse.quote(msg_wa)}", use_container_width=True)
-
-            with col_preview:
-                st.subheader("👁️ Vista Previa Oficial (Página 1)")
-                st.markdown('<div class="preview-container">', unsafe_allow_html=True)
-                if img_preview:
-                    st.image(img_preview, caption=f"Página 1 - {nombre_confirmado} ({cups_actual})", use_container_width=True)
-                st.markdown('</div>', unsafe_allow_html=True)
-
-# ==============================================================================
-# PESTAÑA 2: ARCHIVO CLÍNICO Y REPORTES GERENCIALES
-# ==============================================================================
-with tab_historial:
-    st.markdown("### 📁 Archivo Clínico Digital & Reportes Gerenciales")
-    historial, origen_datos = obtener_historial_servicio()
-
-    if not historial:
-        st.info("Aún no hay estudios archivados en el sistema.")
-    else:
-        df_produccion = pd.DataFrame(historial)
-
-        col_r1, col_r2 = st.columns([2.5, 1.5])
-        with col_r1:
-            st.markdown(f"**Total de estudios custodiados ({origen_datos}):** `{len(df_produccion)} procedimientos certificados`")
-        with col_r2:
-            excel_bytes, ext_salida = generar_excel_avanzado_produccion(df_produccion)
-            mime_tipo = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" if ext_salida == "xlsx" else "text/csv"
-            etiqueta_boton = "📊 DESCARGAR REPORTE EXCEL GERENCIAL (.XLSX)" if ext_salida == "xlsx" else "📊 DESCARGAR REPORTE RIPS (CSV EXCEL)"
-
-            st.download_button(
-                label=etiqueta_boton,
-                data=excel_bytes,
-                file_name=f"Reporte_Gerencial_Cencardio_{ahora_colombia().strftime('%Y%m%d')}.{ext_salida}",
-                mime=mime_tipo,
-                use_container_width=True,
-                type="primary"
-            )
-
-        st.divider()
-
-        f1, f2, f3 = st.columns([1.5, 1.2, 1.3])
-        with f1:
-            busqueda = st.text_input("🔍 Buscar por paciente o documento:", "")
-        with f2:
-            df_produccion["Mes_Periodo"] = pd.to_datetime(df_produccion["fecha_registro"]).dt.strftime('%Y-%m')
-            meses_disp = ["Todos los meses"] + sorted(df_produccion["Mes_Periodo"].unique().tolist(), reverse=True)
-            mes_sel = st.selectbox("📅 Carpeta Mensual:", meses_disp)
-        with f3:
-            mods_disp = ["Todas las modalidades"] + sorted(df_produccion["modalidad"].unique().tolist())
-            mod_sel = st.selectbox("🎛️ Modalidad:", mods_disp)
-
-        df_filtrado = df_produccion.copy()
-        if busqueda.strip():
-            df_filtrado = df_filtrado[df_filtrado["paciente"].str.contains(busqueda, case=False, na=False)]
-        if mes_sel != "Todos los meses":
-            df_filtrado = df_filtrado[df_filtrado["Mes_Periodo"] == mes_sel]
-        if mod_sel != "Todas las modalidades":
-            df_filtrado = df_filtrado[df_filtrado["modalidad"] == mod_sel]
-
-        st.write("")
-        meses_grupos = sorted(df_filtrado["Mes_Periodo"].unique().tolist(), reverse=True)
-
-        for mes_g in meses_grupos:
-            df_mes = df_filtrado[df_filtrado["Mes_Periodo"] == mes_g]
-            with st.expander(f"📁 CARPETA: {mes_g} ({len(df_mes)} estudios clínicos)", expanded=True):
-                for item in df_mes.itertuples():
-                    nom_arch = normalizar_nombre_archivo(item.paciente)
-                    
-                    st.markdown(f"""
-                        <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:10px; padding:0.8rem 1.1rem; margin-bottom:0.7rem;">
-                            <div style="display:flex; justify-content:space-between; align-items:center;">
-                                <div>
-                                    <b style="color:#0a2540; font-size:1.02rem;">👤 {item.paciente}</b> 
-                                    <span style="background:#e0f2fe; color:#0369a1; font-size:0.72rem; font-weight:700; padding:2px 8px; border-radius:12px; margin-left:6px;">{item.modalidad} ({item.cups})</span>
-                                    <div style="font-size:0.82rem; color:#64748b; margin-top:2px;">
-                                        📅 <b>Registro:</b> {item.fecha_registro} | 👨‍⚕️ <b>Lector:</b> {item.medico} | 🩺 <b>Parámetro:</b> {item.parametro_clave}
-                                    </div>
-                                </div>
-                                <div style="font-family:monospace; font-size:0.75rem; color:#0284c7; font-weight:700;">
-                                    Cód: {item.codigo_verificacion[:14]}...
-                                </div>
-                            </div>
-                        </div>
-                    """, unsafe_allow_html=True)
-
-                    c_d, c_del, c_v = st.columns([1.5, 1, 4])
-                    with c_d:
-                        if item.pdf_url:
-                            st.link_button("📥 Ver / Descargar PDF", item.pdf_url, use_container_width=True)
-                        else:
-                            pdf_recup = obtener_pdf_bytes_individual(item.id)
-                            if pdf_recup:
-                                st.download_button(
-                                    label="📥 Descargar Copia PDF",
-                                    data=pdf_recup,
-                                    file_name=f"{nom_arch}_{item.cups.replace(' ', '_')}.pdf",
-                                    mime="application/pdf",
-                                    key=f"desc_{item.id}",
-                                    use_container_width=True
-                                )
-                    with c_del:
-                        if st.button("🗑️ Eliminar", key=f"elim_{item.id}", use_container_width=True):
-                            eliminar_estudio_servicio(item.id)
-                            st.toast(f"Estudio de {item.paciente} eliminado.", icon="🗑️")
-                            st.rerun()
+            <div style="font-size: 1.35rem; font-weight:
