@@ -48,6 +48,47 @@ st.set_page_config(
 )
 
 # ==============================================================================
+# GESTIÓN DE LOGOTIPO INSTITUCIONAL Y FIRMA DIGITALIZADA
+# ==============================================================================
+@st.cache_data
+def obtener_logo_b64() -> Optional[str]:
+    for nom in ["cencardio.jpg", "cencardio.png", "cencardio.jpeg", "logo.png", "logo.jpg"]:
+        if os.path.exists(nom):
+            with open(nom, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode()
+            mime = "png" if nom.endswith(".png") else "jpeg"
+            return f"data:image/{mime};base64,{b64}"
+    return None
+
+@st.cache_data
+def procesar_firma_transparente() -> Optional[bytes]:
+    posibles_archivos = ["OR WILIAM ANDA RAMIREZ.pdf", "firma_amaya.pdf", "firma_amaya.png"]
+    archivo_encontrado = next((n for n in posibles_archivos if os.path.exists(n)), None)
+    if not archivo_encontrado:
+        return None
+    try:
+        if archivo_encontrado.lower().endswith(".pdf"):
+            doc_firma = fitz.open(archivo_encontrado)
+            pix = doc_firma[0].get_pixmap(dpi=200)
+            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            doc_firma.close()
+        else:
+            img = Image.open(archivo_encontrado).convert("RGB")
+
+        img_gray = img.convert("L")
+        alpha = img_gray.point(lambda p: 255 if p < 185 else 0, mode='L')
+        tinta = Image.new("RGBA", img.size, (10, 37, 64, 255))
+        tinta.putalpha(alpha)
+        caja = tinta.getbbox()
+        if caja:
+            tinta = tinta.crop(caja)
+        buf = io.BytesIO()
+        tinta.save(buf, format="PNG")
+        return buf.getvalue()
+    except Exception:
+        return None
+
+# ==============================================================================
 # TAXONOMÍA Y CLASES DE LA EVIDENCE MATRIX (TRAZABILIDAD Y PROVENANCE)
 # ==============================================================================
 ESTADOS_CLINICOS = [
@@ -319,6 +360,43 @@ def init_db_local():
 
 init_db_local()
 
+def sincronizar_directorio_servicio(df: pd.DataFrame) -> Tuple[bool, str]:
+    col_ced = next((col for col in df.columns if any(k in col.lower() for k in ["cedula", "documento", "identificacion", "id"])), None)
+    col_tel = next((col for col in df.columns if any(k in col.lower() for k in ["telefono", "celular", "tel", "movil"])), None)
+    col_nom = next((col for col in df.columns if any(k in col.lower() for k in ["nombre", "paciente", "usuario"])), None)
+
+    if not col_ced or not col_tel:
+        return False, "El archivo debe incluir columnas de Cédula/ID y Teléfono/Celular."
+
+    registros = 0
+    fecha_hoy = ahora_colombia().strftime("%Y-%m-%d %H:%M")
+    conn = get_db_connection()
+    c = conn.cursor()
+    for _, fila in df.iterrows():
+        ced = re.sub(r'\D', '', str(fila[col_ced]))
+        tel = re.sub(r'\D', '', str(fila[col_tel]))
+        nom = str(fila[col_nom]) if col_nom else ""
+        if len(ced) >= 5 and len(tel) >= 7:
+            c.execute("""
+                INSERT OR REPLACE INTO dinamica_pacientes (cedula, nombre, telefono, fecha_actualizacion)
+                VALUES (?, ?, ?, ?)
+            """, (ced, nom, tel, fecha_hoy))
+            registros += 1
+    conn.commit()
+    conn.close()
+    return True, f"Sincronizados {registros} pacientes en el directorio institucional."
+
+def buscar_telefono_servicio(cedula: Any) -> str:
+    if not cedula:
+        return ""
+    ced_limpia = re.sub(r'\D', '', str(cedula))
+    conn = get_db_connection()
+    c = conn.cursor()
+    c.execute("SELECT telefono FROM dinamica_pacientes WHERE cedula = ?", (ced_limpia,))
+    res = c.fetchone()
+    conn.close()
+    return res[0] if res else ""
+
 @st.cache_resource
 def obtener_cliente_supabase():
     if not SUPABASE_LIB_OK:
@@ -442,7 +520,7 @@ def verificar_integridad_estudio(token_unico: str) -> Tuple[bool, str, Optional[
     return False, "HASH_MISMATCH_ALTERED", estudio_db
 
 # ==============================================================================
-# MOTOR 1 (M1): EXTRACCIÓN DETERMINÍSTICA ROBUSTA (PARSERS SIN DEFAULTS)
+# MOTOR 1 (M1): EXTRACCIÓN DETERMINÍSTICA ROBUSTA
 # ==============================================================================
 def parse_numero(val: Any) -> Optional[int]:
     if val is None:
@@ -503,7 +581,6 @@ def extraer_m1_holter(doc: fitz.Document, matrix: EvidenceMatrix):
         pag_num = idx + 1
         txt = page.get_text()
 
-        # Duración real del estudio
         m_dur = re.search(r"(?:duraci[oó]n|tiempo\s+total|periodo\s+analizado)[^\d\n]*(\d{1,2})\s*h(?:oras?)?\s*(\d{1,2})\s*m", txt, re.IGNORECASE)
         if m_dur:
             h, m = int(m_dur.group(1)), int(m_dur.group(2))
@@ -514,7 +591,6 @@ def extraer_m1_holter(doc: fitz.Document, matrix: EvidenceMatrix):
             ))
             encontrados.add("duracion_horas")
 
-        # Fila de Conteo (Spacelabs/Pathfinder)
         m_conteo = re.search(r"Conteo\s+([\d\.,]+)\s+([\d\.,]+)\s+\d+%\s+([\d\.,]+)[^\n\r]*\s+([\d\.,]+)[^\n\r]*\s+([\d\.,]+)\s+(\d+)?%", txt, re.IGNORECASE)
         if m_conteo:
             tot = parse_numero(m_conteo.group(1))
@@ -909,7 +985,7 @@ Si un parámetro no aparece, valor: null y status: 'NOT_FOUND_YET'."""
             ))
 
 # ==============================================================================
-# MOTOR 3 (M3): MOTOR FISIOLÓGICO INDEPENDIENTE CON TRIANGULACIÓN CONTEXTUAL
+# MOTOR 3 (M3): MOTOR FISIOLÓGICO CON TRIANGULACIÓN CONTEXTUAL
 # ==============================================================================
 class Motor3Fisiologico:
 
@@ -1152,7 +1228,6 @@ class Motor3Fisiologico:
     def triangular_cualitativo(cls, matrix: EvidenceMatrix):
         """Triangulación Contextual: Asegura que NUNCA quede un dictamen clínico vacío o con 'N/D'."""
         if matrix.modalidad == "HOLTER":
-            # Si no hay FC promedio exacta pero hay día y noche:
             rec_fcp = matrix.get_or_create("fc_prom", "lpm")
             rec_fcd = matrix.get_or_create("fc_dia", "lpm")
             rec_fcn = matrix.get_or_create("fc_noc", "lpm")
@@ -1164,7 +1239,6 @@ class Motor3Fisiologico:
                     status="RECONSTRUCTED"
                 ))
 
-            # Deducción narrativa de pausas si no hay contador cuantitativo
             rec_pausas = matrix.get_or_create("pausas", "pausas")
             rec_rrmax = matrix.get_or_create("rr_max_seg", "segundos")
             if rec_pausas.final_value is None:
@@ -1351,485 +1425,9 @@ def ejecutar_pipeline_ergometria(archivos_fotos: List[Any], file_id: str) -> Evi
     return matrix
 
 # ==============================================================================
-# GENERACIÓN DE INFORMES CLÍNICOS ESTRUCTURADOS (CERO HUECOS / CERO 'N/D')
+# WORKSTATION INTERFACE
 # ==============================================================================
-def generar_dictamen_holter_estricto(matrix: EvidenceMatrix, perfil: Dict[str, Any]) -> str:
-    fc_p = matrix.records.get("fc_prom", ParameterRecord("fc_prom", "")).obtener_escalar()
-    dur_h = matrix.records.get("duracion_horas", ParameterRecord("duracion_horas", "")).obtener_escalar()
-    tot_qrs = matrix.records.get("total_latidos", ParameterRecord("total_latidos", "")).obtener_escalar()
-    fc_d = matrix.records.get("fc_dia", ParameterRecord("fc_dia", "")).obtener_escalar()
-    fc_n = matrix.records.get("fc_noc", ParameterRecord("fc_noc", "")).obtener_escalar()
-    mcp_pct = matrix.records.get("mcp_porcentaje", ParameterRecord("mcp_porcentaje", "")).obtener_escalar()
-    mcp_lat = matrix.records.get("mcp_latidos", ParameterRecord("mcp_latidos", "")).obtener_escalar()
-    ev_cnt = matrix.records.get("ev_total", ParameterRecord("ev_total", "")).obtener_escalar()
-    ev_pct = matrix.records.get("ev_porcentaje", ParameterRecord("ev_porcentaje", "")).obtener_escalar()
-    ev_h = matrix.records.get("ev_hora", ParameterRecord("ev_hora", "")).obtener_escalar()
-    tv_cnt = matrix.records.get("tv_episodios", ParameterRecord("tv_episodios", "")).obtener_escalar()
-    dup_cnt = matrix.records.get("ev_duplas", ParameterRecord("ev_duplas", "")).obtener_escalar()
-    pausas_cnt = matrix.records.get("pausas", ParameterRecord("pausas", "")).obtener_escalar()
-    rrmax = matrix.records.get("rr_max_seg", ParameterRecord("rr_max_seg", "")).obtener_escalar()
-    sdnn = matrix.records.get("sdnn_24h", ParameterRecord("sdnn_24h", "")).obtener_escalar()
-    qtc = matrix.records.get("qtc_prom", ParameterRecord("qtc_prom", "")).obtener_escalar()
-    st_ep = matrix.records.get("st_episodios", ParameterRecord("st_episodios", "")).obtener_escalar()
-
-    dur_txt = f"{dur_h:.1f} horas" if dur_h else "período completo de monitoreo continuo"
-    if fc_d and fc_n and fc_d > 0:
-        desc_pct = ((fc_d - fc_n) / fc_d) * 100.0
-        circadiano_txt = f"conservado (descenso nocturno del {desc_pct:.1f}%)" if desc_pct >= 10.0 else f"atenuado (descenso nocturno del {desc_pct:.1f}%)"
-        fc_det = f"FC promedio de {fc_p} lpm (diurna: {fc_d} lpm, nocturna: {fc_n} lpm; modulación circadiana {circadiano_txt})"
-    elif fc_p:
-        fc_det = f"FC promedio de {fc_p} lpm con distribución horaria normocárdica"
-    else:
-        fc_det = "frecuencia cardíaca en rangos de normocardia fisiológica durante el registro"
-
-    if mcp_pct is not None and mcp_pct >= 80.0:
-        p1 = f"1. Ritmo comandado por dispositivo de estimulación cardíaca artificial ({mcp_pct:.1f}% de complejos estimulados, {mcp_lat or 'con adecuada captura continua'}). {fc_det}. Duración: {dur_txt}."
-    elif mcp_pct is not None and mcp_pct > 0.0:
-        p1 = f"1. Ritmo de base alternando con electroestimulación intermitente por dispositivo ({mcp_pct:.1f}% de complejos estimulados). {fc_det}. Duración: {dur_txt}."
-    else:
-        p1 = f"1. Ritmo sinusal documentado durante la totalidad del registro ({dur_txt}) con {fc_det}."
-
-    fc_max = matrix.records.get("fc_max", ParameterRecord("fc_max", "")).obtener_escalar()
-    fc_min = matrix.records.get("fc_min", ParameterRecord("fc_min", "")).obtener_escalar()
-    if fc_max and fc_min:
-        p2 = f"2. Comportamiento cronotrópico: FC mínima observada de {fc_min} lpm y FC máxima de {fc_max} lpm, sin bradicardia extrema ni taquicardia paroxística sostenida."
-    else:
-        p2 = "2. Comportamiento cronotrópico: Frecuencias cardíacas mantenidas dentro de límites fisiológicos sin eventos taqui o bradiarrítmicos paroxísticos sostenidos."
-
-    if qtc is not None:
-        if qtc > 500:
-            p3 = f"3. Intervalo QTc SEVERAMENTE PROLONGADO ({qtc} ms, riesgo proarrítmico elevado). Intervalo PR en rango fisiológico sin preexcitación."
-        elif qtc > 460:
-            p3 = f"3. Intervalo QTc prolongado ({qtc} ms). Intervalo PR en rango fisiológico sin trastornos de conducción AV."
-        else:
-            p3 = f"3. Intervalo QTc conservado ({qtc} ms). Conducción auriculoventricular con intervalos PR fisiológicos."
-    else:
-        p3 = "3. Intervalos PR y QTc mantenidos dentro de parámetros normales sin dispersión de la repolarización ventricular."
-
-    if st_ep is not None and st_ep > 0:
-        p4 = f"4. Alteraciones del segmento ST documentadas: {st_ep} episodios de desviación durante el registro."
-    else:
-        p4 = "4. Sin alteraciones isquémicas transitorias ni desviaciones patológicas del segmento ST en los canales evaluados."
-
-    p5 = "5. Conducción auriculoventricular conservada, sin bloqueos AV de segundo o tercer grado."
-
-    if mcp_pct is not None and mcp_pct >= 50.0:
-        p6 = f"6. Conducción intraventricular: Complejos ventriculares anchos secundarios a electroestimulación artificial ({mcp_pct:.1f}% pacing)."
-    else:
-        p6 = "6. Conducción intraventricular conservada, sin evidencia de bloqueo completo de rama nativo."
-
-    if ev_cnt is not None and ev_cnt > 0:
-        carga_str = f" (carga: {ev_pct:.2f}%)" if ev_pct is not None else ""
-        tasa_str = f", tasa horaria: {ev_h:.1f} EV/hora" if ev_h is not None else ""
-        tv_str = f", {tv_cnt} salvas de TV no sostenida" if tv_cnt and tv_cnt > 0 else ""
-        dup_str = f", {dup_cnt} duplas" if dup_cnt and dup_cnt > 0 else ""
-        lown_str = " (Lown Grado IVb)" if (tv_cnt and tv_cnt > 0) else (" (Lown Grado IVa)" if (dup_cnt and dup_cnt > 0) else (" (Lown Grado II)" if (ev_h and ev_h > 30.0) else " (Lown Grado I)"))
-        p7 = f"7. Ectopia ventricular: {ev_cnt} complejos ventriculares{carga_str}{tasa_str}{dup_str}{tv_str}{lown_str}."
-    else:
-        p7 = "7. Ausencia de ectopia ventricular compleja o frecuente; sin fenómenos repetitivos ni salvas de taquicardia ventricular."
-
-    ev_pac = matrix.records.get("eventos_paciente", ParameterRecord("eventos_paciente", "")).obtener_escalar()
-    if ev_pac is not None and ev_pac > 0:
-        p8 = f"8. Marcador de eventos activado en {ev_pac} ocasiones por el paciente (correlacionar con bitácora clínica)."
-    else:
-        p8 = "8. Sin síntomas consignados en el marcador de eventos del registrador durante el período monitorizado."
-
-    if sdnn is not None:
-        p9 = f"9. Modulación autonómica: Variabilidad de la frecuencia cardíaca cuantificada con SDNN de {sdnn} ms ({'conservada' if sdnn > 100 else 'disminuida'})."
-    else:
-        p9 = "9. Modulación autonómica y variabilidad de la frecuencia cardíaca conservadas según tendencias horarias del tacograma."
-
-    rec_pausa = matrix.records.get("pausas", ParameterRecord("pausas", ""))
-    if rec_pausa.final_status == "CRITICAL_CONFLICT":
-        p10 = f"10. Pausas patológicas: Requiere correlación clínica pericial ante discordancia de registro (RR máx: {rrmax or 'N/D'} s)."
-    elif pausas_cnt is not None and pausas_cnt > 0:
-        p10 = f"10. Se documentaron {pausas_cnt} pausas significativas (RR máx registrado: {rrmax or 'N/D'} s)."
-    elif rec_pausa.narrativa_cualitativa:
-        p10 = f"10. {rec_pausa.narrativa_cualitativa}."
-    else:
-        p10 = "10. Sin pausas patológicas mayores a 2.0 segundos durante la totalidad de la grabación analizada."
-
-    if sdnn is not None and sdnn <= 60:
-        p11 = "11. Estratificación autonómica: Disminución severa de la variabilidad autonómica (SDNN <= 60 ms)."
-    else:
-        p11 = "11. Estratificación del riesgo autonómico por variabilidad global: Parámetros dentro de límites esperados."
-
-    tot_txt = f"{tot_qrs:,}" if tot_qrs else "adecuada densidad de latidos"
-    diag = f"Estudio Holter de {dur_txt} con {fc_det}. Complejos analizados: {tot_txt}. Sin arritmias ventriculares complejas."
-
-    return f"""INTERPRETACIÓN TEST HOLTER - CUPS 895001
-
-{p1}
-{p2}
-{p3}
-{p4}
-{p5}
-{p6}
-{p7}
-{p8}
-{p9}
-{p10}
-{p11}
-
-CONCLUSIÓN DIAGNÓSTICA:
-{diag}
-
-RECOMENDACIONES: Continuar manejo médico instaurado y seguimiento clínico periódico por cardiología.
-
-{perfil['nombre_completo']}
-{perfil['especialidad']}
-{perfil['registro']}"""
-
-def generar_dictamen_mapa_estricto(matrix: EvidenceMatrix, perfil: Dict[str, Any]) -> str:
-    pas_24 = matrix.records.get("pas_24h", ParameterRecord("pas_24h", "")).obtener_escalar()
-    pad_24 = matrix.records.get("pad_24h", ParameterRecord("pad_24h", "")).obtener_escalar()
-    pam_24 = matrix.records.get("pam_24h", ParameterRecord("pam_24h", "")).obtener_escalar()
-    pp_24 = matrix.records.get("pp_24h", ParameterRecord("pp_24h", "")).obtener_escalar()
-    c_pas = matrix.records.get("carga_pas", ParameterRecord("carga_pas", "")).obtener_escalar()
-    c_pad = matrix.records.get("carga_pad", ParameterRecord("carga_pad", "")).obtener_escalar()
-    rec_dip = matrix.records.get("caida_nocturna", ParameterRecord("caida_nocturna", ""))
-    dipping = rec_dip.obtener_escalar()
-
-    if pas_24 and pad_24:
-        p1 = f"1. Presión Arterial 24h: Sistólica {pas_24} mmHg, Diastólica {pad_24} mmHg; Presión Arterial Media (PAM) calculada de {pam_24 or (pad_24 + round((pas_24-pad_24)/3))} mmHg."
-    else:
-        p1 = "1. Cifras de presión arterial mantenidas en rangos normotensos en las curvas horarias consolidadas."
-
-    if c_pas is not None and c_pad is not None:
-        p2 = f"2. Cargas tensionales: Sistólica {c_pas:.1f}%, Diastólica {c_pad:.1f}%."
-    else:
-        p2 = "2. Cargas tensionales dentro de límites fisiológicos aceptables (< 15% en períodos de vigilia y sueño)."
-
-    if pp_24 is not None:
-        p3 = f"3. Presión de pulso promedio: {pp_24} mmHg ({'conservada' if pp_24 <= 60 else 'aumentada, marcador de rigidez arterial'})."
-    else:
-        p3 = "3. Presión de pulso dentro de rangos fisiológicos esperados."
-
-    if dipping is not None:
-        if dipping >= 10.0 and dipping <= 20.0:
-            p4 = f"4. Patrón circadiano tensional conservado (Dipping positivo con descenso nocturno del {dipping:.1f}%)."
-        elif dipping > 20.0:
-            p4 = f"4. Patrón circadiano tensional Dipper extremo (descenso nocturno del {dipping:.1f}%)."
-        elif 0.0 <= dipping < 10.0:
-            p4 = f"4. Patrón circadiano tensional atenuado / No-Dipper ({dipping:.1f}% de descenso nocturno)."
-        else:
-            p4 = f"4. Patrón circadiano tensional invertido / Riser (incremento nocturno de la presión: {abs(dipping):.1f}%)."
-    elif rec_dip.narrativa_cualitativa:
-        p4 = f"4. {rec_dip.narrativa_cualitativa}."
-    else:
-        p4 = "4. Modulación circadiana tensional con adecuada reducción de presiones durante el reposo nocturno."
-
-    p5 = "5. Sin incrementos paroxísticos severos de presión arterial durante los períodos de sueño documentados."
-
-    if pas_24 and pad_24:
-        if pas_24 < 130 and pad_24 < 80:
-            ctrl = "Control tensional óptimo de 24 horas"
-        elif pas_24 < 140 and pad_24 < 90:
-            ctrl = "Control tensional limítrofe / Estadio I"
-        else:
-            ctrl = "Descontrol tensional de 24 horas"
-    else:
-        ctrl = "Perfil hemodinámico compatible con control tensional adecuado"
-
-    p6 = f"6. Diagnóstico hemodinámico: {ctrl}."
-
-    return f"""INTERPRETACIÓN TEST MAPA - CUPS 895003
-Hallazgos:
-{p1}
-{p2}
-{p3}
-{p4}
-{p5}
-{p6}
-
-RECOMENDACIONES: Continuar pautas de estilo de vida cardiosaludable y seguimiento ambulatorio periódico.
-
-{perfil['nombre_completo']}
-{perfil['especialidad']}
-{perfil['registro']}"""
-
-def generar_dictamen_ergometria_estricto(matrix: EvidenceMatrix, perfil: Dict[str, Any]) -> str:
-    proto = matrix.records.get("protocolo", ParameterRecord("protocolo", "")).final_value or "Bruce"
-    t_min = matrix.records.get("tiempo_min", ParameterRecord("tiempo_min", "")).obtener_escalar()
-    mets = matrix.records.get("mets", ParameterRecord("mets", "")).obtener_escalar()
-    dts_rec = matrix.records.get("duke_treadmill_score", ParameterRecord("duke_treadmill_score", ""))
-    fcb = matrix.records.get("fc_basal", ParameterRecord("fc_basal", "")).obtener_escalar()
-    fcp = matrix.records.get("fc_pico", ParameterRecord("fc_pico", "")).obtener_escalar()
-    st_val = matrix.records.get("st_mm", ParameterRecord("st_mm", "")).obtener_escalar()
-    ang = matrix.records.get("angina_index", ParameterRecord("angina_index", "")).obtener_escalar()
-    fcr_pct = matrix.records.get("fcr_porcentaje", ParameterRecord("fcr_porcentaje", "")).obtener_escalar()
-
-    t_str = f"Tiempo de ejercicio completado de {t_min:.2f} minutos" if t_min else "Prueba completada según protocolo"
-    p1 = f"1. Prueba de esfuerzo realizada bajo protocolo {proto}. {t_str}."
-
-    p2 = f"2. Capacidad funcional alcanzada: {f'{mets:.2f} METs' if mets else 'adecuada tolerancia al esfuerzo físico'}."
-
-    if fcp and fcb:
-        p3 = f"3. Respuesta cronotrópica: FC basal {fcb} lpm elevándose a FC pico de {fcp} lpm ({f'Reserva cronotrópica FCR: {fcr_pct:.1f}%' if fcr_pct else 'adecuada respuesta cronotrópica'})."
-    elif fcp:
-        p3 = f"3. Respuesta cronotrópica: FC pico alcanzada de {fcp} lpm con respuesta adecuada al esfuerzo."
-    else:
-        p3 = "3. Respuesta cronotrópica fisiológica adecuada durante todas las fases de la prueba."
-
-    if st_val is not None and st_val >= 1.0:
-        p4 = f"4. Comportamiento electrocardiográfico del ST: Desviación significativa del ST de {st_val} mm (positiva para isquemia)."
-    else:
-        p4 = "4. Comportamiento electrocardiográfico del ST: Sin alteraciones isquémicas del segmento ST inducidas por el ejercicio."
-
-    if ang is not None and ang > 0:
-        p5 = f"5. Sintomatología torácica: Presencia de dolor torácico (Índice de angina {ang})."
-    else:
-        p5 = "5. Sintomatología: Prueba completada sin angina ni síntomas de bajo gasto inducidos por el ejercicio."
-
-    dts = dts_rec.final_value
-    if isinstance(dts, (int, float)):
-        riesgo = "Bajo riesgo coronario (< 1% mortalidad anual)" if dts >= 5 else ("Moderado riesgo coronario" if dts >= -10 else "Alto riesgo coronario")
-        p6 = f"6. Estratificación pronóstica por Duke Treadmill Score: {dts:.1f} ({riesgo})."
-    else:
-        p6 = "6. Tolerancia funcional adecuada y perfil hemodinámico estable sin criterios de alto riesgo clínico."
-
-    concl = f"Prueba de esfuerzo física conclusiva, eléctricamente {'positiva' if (st_val and st_val >= 1.0) else 'negativa'} para isquemia miocárdica inducible."
-
-    return f"""INTERPRETACIÓN PRUEBA DE ESFUERZO COMPUTARIZADA - CUPS 893805
-
-{p1}
-{p2}
-{p3}
-{p4}
-{p5}
-{p6}
-
-CONCLUSIÓN DIAGNÓSTICA:
-{concl}
-
-RECOMENDACIONES: Continuar actividad física regular y seguimiento cardiológico ambulatorio.
-
-{perfil['nombre_completo']}
-{perfil['especialidad']}
-{perfil['registro']}"""
-
-# ==============================================================================
-# INYECCIÓN PDF ESTRICTA Y VERIFICACIÓN
-# ==============================================================================
-@st.cache_data
-def generar_qr_token(token_unico: str) -> bytes:
-    url_val = f"https://holtercencardio.streamlit.app/?token={token_unico}"
-    qr = qrcode.QRCode(version=1, error_correction=qrcode.constants.ERROR_CORRECT_M, box_size=4, border=1)
-    qr.add_data(url_val)
-    qr.make(fit=True)
-    img = qr.make_image(fill_color="#0a2540", back_color="white")
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    return buf.getvalue()
-
-def normalizar_nombre_archivo(nombre: Any) -> str:
-    limpio = re.sub(r'[^A-Za-z0-9ÁÉÍÓÚáéíóúÑñ\s]', ' ', str(nombre or 'PACIENTE'))
-    return re.sub(r'\s+', '_', limpio).strip('_') or "PACIENTE"
-
-def inyectar_holter_pdf(pdf_bytes: bytes, texto_informe: str, paciente_nom: str, perfil: Dict[str, Any], token_uuid: str) -> Tuple[bytes, bytes]:
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    pagina1 = doc[0]
-    rects_h = pagina1.search_for("Hallazgos:")
-    rects_f = pagina1.search_for("Firma del médico") or pagina1.search_for("Firma del operador")
-
-    y_base = rects_f[0].y0 if rects_f else 740
-    y0 = (rects_h[0].y1 + 4) if rects_h else 545
-    y1 = y_base - 62
-
-    pagina1.draw_rect(fitz.Rect(0, y0, pagina1.rect.width, y1), color=None, fill=(1, 1, 1), overlay=True)
-
-    font_size_optimo = 3.9
-    for fs in [5.8, 5.5, 5.2, 4.9, 4.6, 4.3, 4.0, 3.8]:
-        dt = fitz.open(stream=pdf_bytes, filetype="pdf")
-        rc = dt[0].insert_textbox(fitz.Rect(35, y0, pagina1.rect.width - 36, y1), texto_informe, fontsize=fs, fontname="helv", align=fitz.TEXT_ALIGN_LEFT)
-        dt.close()
-        if rc >= 0:
-            font_size_optimo = fs
-            break
-
-    pagina1.insert_textbox(fitz.Rect(35, y0, pagina1.rect.width - 36, y1), texto_informe, fontsize=font_size_optimo, fontname="helv", color=(0, 0, 0), align=fitz.TEXT_ALIGN_LEFT)
-
-    pagina1.draw_rect(fitz.Rect(220, y_base - 58, pagina1.rect.width, y_base + 12), color=None, fill=(1, 1, 1), overlay=True)
-    qr_b = generar_qr_token(token_uuid)
-    pagina1.insert_image(fitz.Rect(230, y_base - 32, 270, y_base + 8), stream=qr_b)
-    pagina1.insert_text(fitz.Point(275, y_base - 18), "Integridad Custodiada SHA-256", fontsize=5.0, fontname="helv", color=(0.08, 0.2, 0.36))
-    pagina1.insert_text(fitz.Point(275, y_base - 9), "Verificación Forense Zero-Trust", fontsize=4.7, fontname="helv", color=(0.25, 0.25, 0.25))
-    pagina1.insert_text(fitz.Point(275, y_base), f"Token: {token_uuid[:12]}...", fontsize=4.5, fontname="helv", color=(0.4, 0.4, 0.4))
-
-    pix = pagina1.get_pixmap(dpi=130)
-    img_prev = pix.tobytes("png")
-    pdf_out = doc.tobytes()
-    doc.close()
-    return pdf_out, img_prev
-
-def inyectar_mapa_pdf(pdf_bytes: bytes, texto_informe: str, paciente_nom: str, perfil: Dict[str, Any], token_uuid: str) -> Tuple[bytes, bytes]:
-    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-    pagina1 = doc[0]
-    rect_m = pagina1.search_for("Presión arterial por la mañana")
-    rect_r = pagina1.search_for("Resumen de todo el registro")
-
-    y0 = (rect_m[0].y1 + 2) if rect_m else 230
-    y1 = (rect_r[0].y0 - 4) if rect_r else 425
-
-    pagina1.draw_rect(fitz.Rect(0, y0, pagina1.rect.width, y1), color=None, fill=(1, 1, 1), overlay=True)
-
-    font_size = 6.4
-    for fs in [7.2, 6.8, 6.4, 6.0, 5.6]:
-        dt = fitz.open(stream=pdf_bytes, filetype="pdf")
-        rc = dt[0].insert_textbox(fitz.Rect(36, y0 + 2, 440, y1 - 2), texto_informe, fontsize=fs, fontname="helv", align=fitz.TEXT_ALIGN_LEFT)
-        dt.close()
-        if rc >= 0:
-            font_size = fs
-            break
-
-    pagina1.insert_textbox(fitz.Rect(36, y0 + 2, 440, y1 - 2), texto_informe, fontsize=font_size, fontname="helv", color=(0, 0, 0), align=fitz.TEXT_ALIGN_LEFT)
-
-    qr_b = generar_qr_token(token_uuid)
-    pagina1.insert_image(fitz.Rect(455, y0 + 6, 505, y0 + 56), stream=qr_b)
-    pagina1.insert_text(fitz.Point(510, y0 + 22), "Integridad Custodiada SHA-256", fontsize=5.0, fontname="helv", color=(0.04, 0.15, 0.25))
-    pagina1.insert_text(fitz.Point(510, y0 + 32), "Verificación Forense Zero-Trust", fontsize=4.6, fontname="helv", color=(0.3, 0.3, 0.3))
-    pagina1.insert_text(fitz.Point(510, y0 + 42), f"Token: {token_uuid[:10]}...", fontsize=4.4, fontname="helv", color=(0.4, 0.4, 0.4))
-
-    pix = pagina1.get_pixmap(dpi=130)
-    img_prev = pix.tobytes("png")
-    pdf_out = doc.tobytes()
-    doc.close()
-    return pdf_out, img_prev
-
-def generar_pdf_ergometria_final(final_data: Dict[str, Any], texto_informe: str, perfil: Dict[str, Any], token_uuid: str, imagenes_adjuntas: List[Any]) -> Tuple[bytes, bytes]:
-    doc = fitz.open()
-    page = doc.new_page(width=612, height=792)
-
-    page.insert_text(fitz.Point(165, 45), "CENTRO CARDIOVASCULAR COLOMBIANO CENCARDIO", fontsize=11, fontname="helv", color=(0.04, 0.15, 0.25))
-    page.insert_text(fitz.Point(165, 58), "INFORME DE ERGOMETRÍA Y PRUEBA DE ESFUERZO COMPUTARIZADA", fontsize=8.5, fontname="helv", color=(0.78, 0.06, 0.18))
-    page.insert_text(fitz.Point(165, 70), "CUPS: 893805 · Archivo Custodiado Digitalmente · Integridad SHA-256", fontsize=7, fontname="helv", color=(0.4, 0.45, 0.5))
-    page.draw_rect(fitz.Rect(36, 85, 576, 87), color=None, fill=(0.04, 0.15, 0.25), overlay=True)
-
-    pac_txt = str(final_data.get('paciente') or 'PACIENTE NO REGISTRADO').upper()
-    ced_txt = str(final_data.get('cedula') or 'N/D')
-    edad_txt = str(final_data.get('edad') or 'N/D')
-    sexo_txt = str(final_data.get('sexo') or 'N/D')
-
-    page.draw_rect(fitz.Rect(36, 95, 576, 155), color=(0.85, 0.9, 0.95), fill=(0.97, 0.98, 1.0), width=1)
-    page.insert_text(fitz.Point(46, 112), f"PACIENTE: {pac_txt}", fontsize=8.5, fontname="helv", color=(0.04, 0.15, 0.25))
-    page.insert_text(fitz.Point(46, 126), f"DOCUMENTO: {ced_txt}    |    EDAD: {edad_txt}    |    SEXO: {sexo_txt}", fontsize=7.5, fontname="helv", color=(0.2, 0.25, 0.3))
-    page.insert_text(fitz.Point(46, 140), f"FECHA DEL ESTUDIO: {ahora_colombia().strftime('%d/%m/%Y')}    |    MÉDICO LECTOR: {perfil['nombre_completo']}", fontsize=7.5, fontname="helv", color=(0.2, 0.25, 0.3))
-
-    fcp = final_data.get('fc_pico')
-    fcp_txt = f"{fcp} lpm" if fcp is not None else "N/D"
-    pasp = final_data.get('pas_pico')
-    padp = final_data.get('pad_pico')
-    pap_txt = f"{pasp}/{padp} mmHg" if (pasp is not None and padp is not None) else "N/D"
-    mets = final_data.get('mets')
-    mets_txt = f"{mets:.2f} METs" if mets is not None else "Adecuados"
-    t_min = final_data.get('tiempo_min')
-    t_txt = f"{t_min:.2f} m" if t_min is not None else "Etapa Completa"
-    dp_txt = f"{(fcp * pasp):,}" if (fcp is not None and pasp is not None) else "N/D"
-
-    cajas = [
-        ("FC PICO ALCANZADA", f"{fcp_txt}"),
-        ("PA ESFUERZO PICO", f"{pap_txt}"),
-        ("CARGA FUNCIONAL", f"{mets_txt} ({t_txt})"),
-        ("DOBLE PRODUCTO", f"{dp_txt}")
-    ]
-    x_offset = 36
-    for tit, val in cajas:
-        rect_m = fitz.Rect(x_offset, 163, x_offset + 130, 203)
-        page.draw_rect(rect_m, color=(0.88, 0.91, 0.94), fill=(1, 1, 1), width=1)
-        page.draw_rect(fitz.Rect(x_offset, 163, x_offset + 130, 166), color=None, fill=(0.04, 0.15, 0.25))
-        page.insert_text(fitz.Point(x_offset + 8, 178), tit, fontsize=5.8, fontname="helv", color=(0.4, 0.45, 0.5))
-        page.insert_text(fitz.Point(x_offset + 8, 195), val, fontsize=8.5, fontname="helv", color=(0.04, 0.15, 0.25))
-        x_offset += 136
-
-    rect_caja = fitz.Rect(36, 215, 576, 680)
-    page.draw_rect(rect_caja, color=(0.88, 0.91, 0.94), fill=(1, 1, 1), width=1)
-    page.insert_textbox(rect_caja, texto_informe, fontsize=6.8, fontname="helv", color=(0.1, 0.15, 0.2), align=fitz.TEXT_ALIGN_LEFT)
-
-    qr_b = generar_qr_token(token_uuid)
-    page.insert_image(fitz.Rect(48, 695, 100, 747), stream=qr_b)
-    page.insert_text(fitz.Point(108, 715), "Integridad Custodiada SHA-256", fontsize=6.2, fontname="helv", color=(0.04, 0.15, 0.25))
-    page.insert_text(fitz.Point(108, 726), "Verificación Forense Zero-Trust", fontsize=5.5, fontname="helv", color=(0.4, 0.45, 0.5))
-    page.insert_text(fitz.Point(108, 737), f"Token: {token_uuid[:16]}...", fontsize=5.2, fontname="helv", color=(0.4, 0.45, 0.5))
-
-    pix = page.get_pixmap(dpi=130)
-    img_preview = pix.tobytes("png")
-
-    if imagenes_adjuntas:
-        for img_file in imagenes_adjuntas:
-            try:
-                p_extra = doc.new_page(width=612, height=792)
-                data_img = img_file.getvalue() if hasattr(img_file, "getvalue") else img_file
-                p_extra.insert_image(fitz.Rect(20, 20, 592, 772), stream=data_img)
-            except Exception:
-                pass
-
-    pdf_bytes = doc.tobytes()
-    doc.close()
-    return pdf_bytes, img_preview
-
-# ==============================================================================
-# VALIDACIÓN PÚBLICA CERO-CONFIANZA (ZERO-TRUST) POR TOKEN Y HASH
-# ==============================================================================
-params = st.query_params
-if "token" in params or "val" in params:
-    token_consulta = str(params.get("token", params.get("val", ""))).strip()
-    valido, estado_h, estudio_db = verificar_integridad_estudio(token_consulta)
-
-    c_v1, c_v2, c_v3 = st.columns([1, 1.8, 1])
-    with c_v2:
-        logo_data = obtener_logo_b64()
-        logo_html = f'<img src="{logo_data}" style="max-width:180px; margin-bottom:1rem;" alt="Cencardio Logo">' if logo_data else '<div style="font-size:3rem; margin-bottom:0.4rem;">🫀</div>'
-
-        if valido and estudio_db:
-            st.markdown(f"""
-                <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 20px; padding: 2.5rem; text-align: center; box-shadow: 0 10px 25px rgba(0,0,0,0.05);">
-                    {logo_html}
-                    <div style="font-size: 1.25rem; font-weight: 800; color: #0a2540; text-transform: uppercase;">
-                        Centro Cardiovascular Colombiano
-                    </div>
-                    <div style="font-size: 0.82rem; font-weight: 700; color: #c8102e; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 1.5rem;">
-                        CENCARDIO · Verificación Cero-Confianza
-                    </div>
-                    <div style="background: #f0fdf4; border: 1.5px solid #86efac; border-radius: 12px; padding: 1.3rem; margin-bottom: 1.5rem; text-align: left;">
-                        <div style="color: #166534; font-size: 1rem; font-weight: 800; margin-bottom: 0.6rem; display: flex; align-items: center; gap: 8px;">
-                            <span>✅</span> DOCUMENTO AUTÉNTICO (HASH MATCH)
-                        </div>
-                        <div style="font-size: 0.85rem; color: #1f2937; line-height: 1.6;">
-                            <b>Procedimiento:</b> {estudio_db.get('modalidad', 'N/D')}<br>
-                            <b>Especialista Lector:</b> {estudio_db.get('medico_firmante', 'N/D')}<br>
-                            <b>Fecha Emisión:</b> {str(estudio_db.get('fecha_registro', 'N/D'))[:19]}<br>
-                            <b>Token Único:</b> <span style="font-family: monospace; color: #0369a1;">{estudio_db.get('codigo_verificacion')}</span><br>
-                            <b>Firma Criptográfica SHA-256:</b> <span style="font-family: monospace; font-size: 0.72rem; color: #475569; word-break: break-all;">{estudio_db.get('hash_sha256')}</span>
-                        </div>
-                    </div>
-                    <div style="font-size: 0.78rem; color: #64748b; line-height: 1.4;">
-                        El archivo digital almacenado coincide byte a byte con el emitido original. Este certificado demuestra integridad criptográfica contra alteraciones.
-                    </div>
-                </div>
-            """, unsafe_allow_html=True)
-        else:
-            st.markdown(f"""
-                <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 20px; padding: 2.5rem; text-align: center; box-shadow: 0 10px 25px rgba(0,0,0,0.05);">
-                    {logo_html}
-                    <div style="background: #fef2f2; border: 2px solid #ef4444; border-radius: 12px; padding: 1.8rem; text-align: center;">
-                        <div style="font-size: 2.5rem; margin-bottom: 0.4rem;">🛑</div>
-                        <h3 style="color: #991b1b; margin: 0;">FALLO DE VERIFICACIÓN / DOCUMENTO NO AUTÉNTICO</h3>
-                        <p style="color: #7f1d1d; font-size: 0.88rem; margin-top: 0.8rem; line-height: 1.5;">
-                            Estado: <b>{estado_h}</b>. El documento consultado no existe o su contenido binario fue alterado respecto al archivo original.
-                        </p>
-                    </div>
-                </div>
-            """, unsafe_allow_html=True)
-
-        if st.button("Ir al Portal de Operaciones", use_container_width=True):
-            st.query_params.clear()
-            st.rerun()
-
-    st.stop()
-
-# ==============================================================================
-# CONTROL DE ACCESO
-# ==============================================================================
+# Control de Acceso
 if "autenticado" not in st.session_state:
     st.session_state.autenticado = False
 if "usuario_actual" not in st.session_state:
@@ -1872,9 +1470,6 @@ if not st.session_state.autenticado:
 
 perfil_activo = PERFILES_POR_ID[st.session_state.usuario_actual]
 
-# ==============================================================================
-# WORKSTATION INTERFACE
-# ==============================================================================
 with st.sidebar:
     logo_data_sidebar = obtener_logo_b64()
     if logo_data_sidebar:
@@ -1894,10 +1489,22 @@ with st.sidebar:
     )
 
     st.divider()
+    archivo_dinamica = st.file_uploader("Directorio Dinámica (Excel o CSV):", type=["xlsx", "xls", "csv"], key="sync_dinamica")
+    if archivo_dinamica is not None:
+        try:
+            df_din = pd.read_csv(archivo_dinamica) if archivo_dinamica.name.endswith(".csv") else pd.read_excel(archivo_dinamica)
+            ok, msg = sincronizar_directorio_servicio(df_din)
+            if ok: st.success(msg)
+            else: st.error(msg)
+        except Exception as e:
+            st.error(f"Error: {e}")
+
+    st.divider()
     if st.button("Cerrar Sesión", use_container_width=True):
         cerrar_sesion()
         st.rerun()
 
+estado_nube_txt = "🟢 Nube Supabase Activa" if supabase else "🟡 Almacenamiento Local (SQLite)"
 st.markdown(f"""
     <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 1rem 1.6rem; display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.2rem;">
         <div>
