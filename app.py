@@ -108,7 +108,7 @@ def cargar_estilos_institucionales():
     .triage-verde {
         background: #f0fdf4 !important; border-left: 6px solid #16a34a !important; color: #166534 !important;
         padding: 1rem 1.3rem !important; border-radius: 12px !important; margin-bottom: 1.2rem !important;
-        box-shadow: 0 4px 12px rgba(22, 163, 74, 0.08);
+        box-shadow: 0 4px 12px rgba(220, 38, 38, 0.08);
     }
     .preview-container {
         border: 2px solid #e2e8f0; border-radius: 14px; background: #ffffff; padding: 8px;
@@ -124,7 +124,7 @@ def cargar_estilos_institucionales():
 st.markdown(cargar_estilos_institucionales(), unsafe_allow_html=True)
 
 # ==============================================================================
-# BASE DE DATOS LOCAL INCONDICIONAL (BLINDAJE ANTE CUALQUIER FALLA)
+# BASE DE DATOS LOCAL INCONDICIONAL (RESPALDO OPERATIVO GARANTIZADO)
 # ==============================================================================
 def init_db_local():
     conn = sqlite3.connect("historial_cencardio.db")
@@ -152,7 +152,7 @@ def init_db_local():
             fecha_actualizacion TEXT
         )
     """)
-    # Migración de columnas segura
+    # Migración defensiva de columnas
     c.execute("PRAGMA table_info(estudios)")
     cols_existentes = [col[1] for col in c.fetchall()]
     cols_a_asegurar = [
@@ -170,11 +170,10 @@ def init_db_local():
     conn.commit()
     conn.close()
 
-# Ejecución incondicional al iniciar la aplicación
 init_db_local()
 
 # ==============================================================================
-# CONECTOR DE NUBE: SUPABASE CON DESINFECCIÓN DE URL Y AUTO-CREACIÓN DE BUCKET
+# CONECTOR DE NUBE PERSISTENTE: SUPABASE CON DESINFECCIÓN DE URL
 # ==============================================================================
 @st.cache_resource
 def obtener_cliente_supabase():
@@ -190,7 +189,6 @@ def obtener_cliente_supabase():
                     url_limpia = url_limpia[:-len(sub)].rstrip("/")
             key_limpia = str(key).strip().strip('"').strip("'")
             cliente = create_client(url_limpia, key_limpia)
-            # Asegurar que el bucket exista
             try:
                 cliente.storage.create_bucket("estudios-pdf", options={"public": True})
             except Exception:
@@ -241,7 +239,6 @@ def guardar_estudio_servicio(nombre, modalidad, cups, parametro_clave, medico, t
         except Exception as e:
             error_nube_detalle = str(e)
 
-    # Respaldo local incondicional (para que nunca se pierda un estudio)
     init_db_local()
     conn = sqlite3.connect("historial_cencardio.db")
     c = conn.cursor()
@@ -255,7 +252,7 @@ def guardar_estudio_servicio(nombre, modalidad, cups, parametro_clave, medico, t
     if guardado_en_nube:
         return True, "Guardado con éxito en nube Supabase y respaldo local sincronizado."
     elif error_nube_detalle:
-        st.info(f"ℹ️ Estudio resguardado en base de datos local (Aviso de nube: revise si la tabla 'estudios' existe en Supabase).")
+        st.info("ℹ️ Estudio resguardado en base de datos local (verifique la tabla 'estudios' en Supabase).")
         return True, "Guardado en almacenamiento local seguro."
     else:
         return True, "Guardado en almacenamiento local seguro."
@@ -851,12 +848,12 @@ def extraer_datos_holter_motor_1(texto):
     # Lectura de la tabla de latidos de Pathfinder SL
     m_conteo_fila = re.search(r"Latidos[^\n\r]*\n[^\n\r]*Conteo\s+([\d\.]+)\s+([\d\.]+)\s+\d+%\s+([\d\.]+)[^\n\r]*\s+([\d\.]+)[^\n\r]*\s+([\d\.]+)\s+(\d+)?%", texto, re.IGNORECASE)
     if m_conteo_fila:
-        d["total_latidos"] = limpiar_numero(m_conteo_fila.group(1))[cite: 10]
-        d["latidos_normales"] = limpiar_numero(m_conteo_fila.group(2))[cite: 10]
-        d["ev_total"] = limpiar_numero(m_conteo_fila.group(3))[cite: 10]
-        d["esv_total"] = limpiar_numero(m_conteo_fila.group(4))[cite: 10]
-        d["mcp_latidos"] = limpiar_numero(m_conteo_fila.group(5))[cite: 10]
-        d["mcp_porcentaje"] = float(m_conteo_fila.group(6)) if m_conteo_fila.group(6) else ((d["mcp_latidos"] / d["total_latidos"] * 100) if d["total_latidos"] > 0 else 0.0)[cite: 10]
+        d["total_latidos"] = limpiar_numero(m_conteo_fila.group(1))
+        d["latidos_normales"] = limpiar_numero(m_conteo_fila.group(2))
+        d["ev_total"] = limpiar_numero(m_conteo_fila.group(3))
+        d["esv_total"] = limpiar_numero(m_conteo_fila.group(4))
+        d["mcp_latidos"] = limpiar_numero(m_conteo_fila.group(5))
+        d["mcp_porcentaje"] = float(m_conteo_fila.group(6)) if m_conteo_fila.group(6) else ((d["mcp_latidos"] / d["total_latidos"] * 100) if d["total_latidos"] > 0 else 0.0)
     else:
         m_tot = re.search(r"Total\s+de\s+latidos\s*[:\.]?\s*([\d\.]+)", texto, re.IGNORECASE) or re.search(r"Total\s+QRS\s*[:\.]?\s*([\d\.]+)", texto, re.IGNORECASE) or re.search(r"Conteo\s+([\d\.]+)\s+[\d\.]+\s+\d+%", texto, re.IGNORECASE)
         d["total_latidos"] = limpiar_numero(m_tot.group(1)) if m_tot else max(70000, d["fc_prom"] * 60 * 24)
@@ -872,9 +869,9 @@ def extraer_datos_holter_motor_1(texto):
     texto_upper = texto.upper()
     d["mcp_presente"] = (d["mcp_latidos"] > 0) or any(k in d["dx_motivo"] for k in ["MCP", "MARCAPASO", "BICAMERAL", "UNICAMERAL", "CDI", "TRC"]) or ("MARCAPASOS" in texto_upper)
 
-    # Intervalo RR Máximo en segundos (Sintaxis 100% limpia sin etiquetas)
+    # Intervalo RR Máximo en segundos
     m_rrmax = re.search(r"Intervalo\s+RR.*?M[áa]x\.\s*longitud\s*([\d,\.]+)\s*s", texto, re.IGNORECASE)
-    d["rr_max_seg"] = float(m_rrmax.group(1).replace(",", ".")) if m_rrmax else 1.30[cite: 10]
+    d["rr_max_seg"] = float(m_rrmax.group(1).replace(",", ".")) if m_rrmax else 1.30
 
     taqui_m = re.search(r"Taquicardia\s+(\d+)(?:[^\n\r\d]+(\d{2,3})\s*:\s*[^\n\r]+)?(?:[^\n\r\d]+(\d+)\s+latidos)?", texto)
     d["taqui_conteo"] = int(taqui_m.group(1)) if taqui_m else 0
@@ -1069,7 +1066,8 @@ Devuelve EXCLUSIVAMENTE este JSON:
         d_final["tv_episodios"] = max(d_m1.get("tv_episodios", 0), d_m2.get("tv_episodios", 0))
         d_final["ev_duplas"] = max(d_m1.get("ev_duplas", 0), d_m2.get("ev_duplas", 0))
         d_final["paciente"] = d_m2.get("paciente", d_m1["paciente"])
-        if d_m2.get("cedula"): d_final["cedula"] = d_m2["cedula"]
+        if d_m2.get("cedula"):
+            d_final["cedula"] = d_m2["cedula"]
 
     for k, v in ajustes_m3.items():
         d_final[k] = v
