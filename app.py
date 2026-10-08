@@ -744,7 +744,8 @@ RECOMENDACIONES: {'Continuar control médico periódico y prescripción de activ
 # MOTOR 1: EXTRACTOR DETERMINÍSTICO C++ / REGEX (LOCAL)
 # ==============================================================================
 def limpiar_numero(val_str):
-    if not val_str: return 0
+    if not val_str:
+        return 0
     s = str(val_str).strip()
     if "," in s and "." in s:
         s = s.replace(".", "").replace(",", ".")
@@ -782,12 +783,12 @@ def extraer_datos_holter_motor_1(texto):
     # Lectura de la tabla de latidos de Pathfinder SL
     m_conteo_fila = re.search(r"Latidos[^\n\r]*\n[^\n\r]*Conteo\s+([\d\.]+)\s+([\d\.]+)\s+\d+%\s+([\d\.]+)[^\n\r]*\s+([\d\.]+)[^\n\r]*\s+([\d\.]+)\s+(\d+)?%", texto, re.IGNORECASE)
     if m_conteo_fila:
-        d["total_latidos"] = limpiar_numero(m_conteo_fila.group(1))[cite: 10]
-        d["latidos_normales"] = limpiar_numero(m_conteo_fila.group(2))[cite: 10]
-        d["ev_total"] = limpiar_numero(m_conteo_fila.group(3))[cite: 10]
-        d["esv_total"] = limpiar_numero(m_conteo_fila.group(4))[cite: 10]
-        d["mcp_latidos"] = limpiar_numero(m_conteo_fila.group(5))[cite: 10]
-        d["mcp_porcentaje"] = float(m_conteo_fila.group(6)) if m_conteo_fila.group(6) else ((d["mcp_latidos"] / d["total_latidos"] * 100) if d["total_latidos"] > 0 else 0.0)[cite: 10]
+        d["total_latidos"] = limpiar_numero(m_conteo_fila.group(1))
+        d["latidos_normales"] = limpiar_numero(m_conteo_fila.group(2))
+        d["ev_total"] = limpiar_numero(m_conteo_fila.group(3))
+        d["esv_total"] = limpiar_numero(m_conteo_fila.group(4))
+        d["mcp_latidos"] = limpiar_numero(m_conteo_fila.group(5))
+        d["mcp_porcentaje"] = float(m_conteo_fila.group(6)) if m_conteo_fila.group(6) else ((d["mcp_latidos"] / d["total_latidos"] * 100) if d["total_latidos"] > 0 else 0.0)
     else:
         m_tot = re.search(r"Total\s+de\s+latidos\s*[:\.]?\s*([\d\.]+)", texto, re.IGNORECASE) or re.search(r"Total\s+QRS\s*[:\.]?\s*([\d\.]+)", texto, re.IGNORECASE) or re.search(r"Conteo\s+([\d\.]+)\s+[\d\.]+\s+\d+%", texto, re.IGNORECASE)
         d["total_latidos"] = limpiar_numero(m_tot.group(1)) if m_tot else max(70000, d["fc_prom"] * 60 * 24)
@@ -805,7 +806,7 @@ def extraer_datos_holter_motor_1(texto):
 
     # Intervalo RR Máximo en segundos
     m_rrmax = re.search(r"Intervalo\s+RR.*?M[áa]x\.\s*longitud\s*([\d,\.]+)\s*s", texto, re.IGNORECASE)
-    d["rr_max_seg"] = float(m_rrmax.group(1).replace(",", ".")) if m_rrmax else 1.30[cite: 10]
+    d["rr_max_seg"] = float(m_rrmax.group(1).replace(",", ".")) if m_rrmax else 1.30
 
     taqui_m = re.search(r"Taquicardia\s+(\d+)(?:[^\n\r\d]+(\d{2,3})\s*:\s*[^\n\r]+)?(?:[^\n\r\d]+(\d+)\s+latidos)?", texto)
     d["taqui_conteo"] = int(taqui_m.group(1)) if taqui_m else 0
@@ -1178,8 +1179,10 @@ def extraer_datos_mapa_sentinel(pdf_bytes, filename=""):
     d["pp_val"] = int(pp_m.group(1)) if pp_m else (d["pas_24h"] - d["pad_24h"])
 
     caida_m = re.search(r"Sist[óo]lico\s*\(mmHg\)\s*.*?([\d,\.\-]+)\s*%", texto, re.DOTALL)
-    try: d["caida_nocturna_val"] = float(caida_m.group(1).replace(",", ".")) if caida_m else 10.0
-    except Exception: d["caida_nocturna_val"] = 10.0
+    try:
+        d["caida_nocturna_val"] = float(caida_m.group(1).replace(",", ".")) if caida_m else 10.0
+    except Exception:
+        d["caida_nocturna_val"] = 10.0
 
     m_sueno = re.search(r"Resumen de los per[íi]odos de sue[ñn]o.*?Sist[óo]lico\s*\(mmHg\)\s*\n?\s*(\d+)\s*.*?(\d{2,3})\s*\([^\)]+\)\s*.*?Diast[óo]lico\s*\(mmHg\)\s*\n?\s*(\d+)\s*.*?(\d{2,3})\s*\(", texto, re.DOTALL | re.IGNORECASE)
     d["pas_max_sueno"] = int(m_sueno.group(2)) if m_sueno else d["pas_24h"]
@@ -1264,7 +1267,8 @@ def procesar_firma_transparente():
         tinta.putalpha(alpha)
 
         caja = tinta.getbbox()
-        if caja: tinta = tinta.crop(caja)
+        if caja:
+            tinta = tinta.crop(caja)
 
         buf = io.BytesIO()
         tinta.save(buf, format="PNG")
@@ -1362,7 +1366,8 @@ def generar_pdf_ergometria_completo(d, texto_informe, perfil, cod_uuid, imagenes
     logo_bytes = None
     for nom in ["cencardio.jpg", "cencardio.png", "cencardio.jpeg", "logo.png", "logo.jpg"]:
         if os.path.exists(nom):
-            with open(nom, "rb") as f: logo_bytes = f.read()
+            with open(nom, "rb") as f:
+                logo_bytes = f.read()
             break
     if logo_bytes:
         page.insert_image(fitz.Rect(36, 30, 150, 75), stream=logo_bytes)
@@ -1538,8 +1543,10 @@ def generar_excel_avanzado_produccion(df_base):
         for c_idx, valor in enumerate(fila, start=1):
             cell = ws_detalle.cell(row=r_idx_d, column=c_idx, value=str(valor))
             cell.border = border_thin
-            if fill_row: cell.fill = fill_row
-            if c_idx in [1, 5]: cell.alignment = Alignment(horizontal="center")
+            if fill_row:
+                cell.fill = fill_row
+            if c_idx in [1, 5]:
+                cell.alignment = Alignment(horizontal="center")
 
     for ws in [ws_resumen, ws_detalle]:
         for col in ws.columns:
@@ -1718,9 +1725,12 @@ with st.sidebar:
         try:
             df_din = pd.read_csv(archivo_dinamica) if archivo_dinamica.name.endswith(".csv") else pd.read_excel(archivo_dinamica)
             ok, msg = sincronizar_directorio_servicio(df_din)
-            if ok: st.success(msg)
-            else: st.error(msg)
-        except Exception as e: st.error(f"Error: {e}")
+            if ok:
+                st.success(msg)
+            else:
+                st.error(msg)
+        except Exception as e:
+            st.error(f"Error: {e}")
 
     st.divider()
     if st.button("Cerrar Sesión", use_container_width=True):
@@ -1819,7 +1829,8 @@ with tab_procesar:
             with c8:
                 if not st.session_state.erg_celular and p_cedula:
                     tel_d = buscar_telefono_servicio(p_cedula)
-                    if tel_d: st.session_state.erg_celular = tel_d
+                    if tel_d:
+                        st.session_state.erg_celular = tel_d
                 p_celular = st.text_input("Celular (WhatsApp):", key="erg_celular")
 
         with col_f2:
@@ -1840,14 +1851,17 @@ with tab_procesar:
                 mostrar_semaforizacion_clinica("ESFUERZO", datos_erg)
 
                 bloqueos, alertas_f = ejecutar_sanity_checks("ESFUERZO", datos_erg)
-                for b in bloqueos: st.error(f"🛑 {b}")
-                for a in alertas_f: st.warning(f"⚠️ {a}")
+                for b in bloqueos:
+                    st.error(f"🛑 {b}")
+                for a in alertas_f:
+                    st.warning(f"⚠️ {a}")
 
                 texto_erg = redactar_informe_ergometria_institucional(datos_erg, perfil_activo)
                 texto_erg_final = st.text_area("Informe Oficial:", value=texto_erg, height=310)
 
                 discrepancias = auditar_coherencia_informe(texto_erg_final, datos_erg, "ESFUERZO")
-                for d_err in discrepancias: st.info(f"🩺 **Alerta de Auditoría:** {d_err}")
+                for d_err in discrepancias:
+                    st.info(f"🩺 **Alerta de Auditoría:** {d_err}")
 
                 cod_uuid = str(uuid.uuid4()).upper()
                 pdf_erg, img_erg_prev = generar_pdf_ergometria_completo(datos_erg, texto_erg_final, perfil_activo, cod_uuid, imagenes_adjuntas=fotos_esfuerzo or [])
@@ -1869,7 +1883,8 @@ with tab_procesar:
 
                 if p_celular:
                     tel_l = re.sub(r'\D', '', p_celular)
-                    if not tel_l.startswith("57") and len(tel_l) == 10: tel_l = "57" + tel_l
+                    if not tel_l.startswith("57") and len(tel_l) == 10:
+                        tel_l = "57" + tel_l
                     url_c = f"https://holtercencardio.streamlit.app/?val={cod_uuid[:12]}&pac={urllib.parse.quote(p_nombre)}&med={urllib.parse.quote(perfil_activo['nombre_completo'])}&proc=CUPS_893805"
                     msg_w = f"Estimado(a) paciente {p_nombre}, CENCARDIO le hace entrega de su resultado oficial de Prueba de Esfuerzo (CUPS 893805). Puede verificar su autenticidad aquí: {url_c}"
                     st.write("")
@@ -1936,11 +1951,11 @@ with tab_procesar:
                     c_m1, c_m2, c_m3 = st.columns(3)
                     with c_m1:
                         st.markdown("**Motor 1: Extractor C++**")
-                        st.caption("Lectura tabular binaria de Pathfinder SL.")
+                        st.caption("Lectura tabular binaria y espacial.")
                         st.write("🟢 Tablas de latidos validadas")
                     with c_m2:
                         st.markdown("**Motor 2: IA Multimodal**")
-                        st.caption("Visión directa de tiras ECG y contexto.")
+                        st.caption("Visión directa de todas las páginas y tiras.")
                         st.write("🟢 Detección visual de espículas y morfología")
                     with c_m3:
                         st.markdown("**Motor 3: Fisiología Simbólica**")
@@ -1956,8 +1971,10 @@ with tab_procesar:
 
             # 3. CANDADOS FISIOLÓGICOS (SANITY CHECKS)
             bloqueos, alertas_f = ejecutar_sanity_checks(tipo_estudio, datos)
-            for b in bloqueos: st.error(f"🛑 {b}")
-            for a in alertas_f: st.warning(f"⚠️ {a}")
+            for b in bloqueos:
+                st.error(f"🛑 {b}")
+            for a in alertas_f:
+                st.warning(f"⚠️ {a}")
 
             # 4. MÉTRICAS CLAVE
             if tipo_estudio == "HOLTER":
@@ -1983,8 +2000,10 @@ with tab_procesar:
             col_edicion, col_preview = st.columns([1, 1], gap="large")
             with col_edicion:
                 c_nom, c_ced = st.columns([1.8, 1.2])
-                with c_nom: nombre_confirmado = st.text_input("👤 Paciente:", value=datos['paciente'])
-                with c_ced: cedula_confirmada = st.text_input("🪪 Cédula / ID:", value=datos.get('cedula', ''))
+                with c_nom:
+                    nombre_confirmado = st.text_input("👤 Paciente:", value=datos['paciente'])
+                with c_ced:
+                    cedula_confirmada = st.text_input("🪪 Cédula / ID:", value=datos.get('cedula', ''))
 
                 tel_actual = st.session_state.get("telefono_paciente", "")
                 telefono_input = st.text_input("📱 Celular (WhatsApp):", value=tel_actual)
@@ -1994,7 +2013,8 @@ with tab_procesar:
                 informe_para_grabar = st.text_area("Texto oficial para inyectar en el reporte final:", value=st.session_state.texto_informe, height=360)
 
                 discrepancias = auditar_coherencia_informe(informe_para_grabar, datos, tipo_estudio)
-                for d_err in discrepancias: st.info(f"🩺 **Alerta de Auditoría:** {d_err}")
+                for d_err in discrepancias:
+                    st.info(f"🩺 **Alerta de Auditoría:** {d_err}")
 
                 debe_estampar = perfil_activo["id"] in ["dr.amaya", "admin"]
 
@@ -2020,7 +2040,8 @@ with tab_procesar:
 
                 if telefono_input:
                     tel_limpio = re.sub(r'\D', '', telefono_input)
-                    if not tel_limpio.startswith("57") and len(tel_limpio) == 10: tel_limpio = "57" + tel_limpio
+                    if not tel_limpio.startswith("57") and len(tel_limpio) == 10:
+                        tel_limpio = "57" + tel_limpio
                     url_cert = f"https://holtercencardio.streamlit.app/?val={st.session_state.estudio_uuid[:12]}&pac={urllib.parse.quote(nombre_confirmado)}&med={urllib.parse.quote(perfil_activo['nombre_completo'])}&proc={urllib.parse.quote(mod_nombre)}"
                     msg_wa = f"Estimado(a) paciente {nombre_confirmado}, el Centro Cardiovascular Colombiano CENCARDIO le hace entrega de su resultado oficial de {mod_nombre} ({cups_actual}). Certificado oficial: {url_cert}"
                     st.write("")
@@ -2065,7 +2086,8 @@ with tab_historial:
         st.divider()
 
         f1, f2, f3 = st.columns([1.5, 1.2, 1.3])
-        with f1: busqueda = st.text_input("🔍 Buscar por paciente o documento:", "")
+        with f1:
+            busqueda = st.text_input("🔍 Buscar por paciente o documento:", "")
         with f2:
             df_produccion["Mes_Periodo"] = pd.to_datetime(df_produccion["fecha_registro"]).dt.strftime('%Y-%m')
             meses_disp = ["Todos los meses"] + sorted(df_produccion["Mes_Periodo"].unique().tolist(), reverse=True)
@@ -2075,9 +2097,12 @@ with tab_historial:
             mod_sel = st.selectbox("🎛️ Modalidad:", mods_disp)
 
         df_filtrado = df_produccion.copy()
-        if busqueda.strip(): df_filtrado = df_filtrado[df_filtrado["paciente"].str.contains(busqueda, case=False, na=False)]
-        if mes_sel != "Todos los meses": df_filtrado = df_filtrado[df_filtrado["Mes_Periodo"] == mes_sel]
-        if mod_sel != "Todas las modalidades": df_filtrado = df_filtrado[df_filtrado["modalidad"] == mod_sel]
+        if busqueda.strip():
+            df_filtrado = df_filtrado[df_filtrado["paciente"].str.contains(busqueda, case=False, na=False)]
+        if mes_sel != "Todos los meses":
+            df_filtrado = df_filtrado[df_filtrado["Mes_Periodo"] == mes_sel]
+        if mod_sel != "Todas las modalidades":
+            df_filtrado = df_filtrado[df_filtrado["modalidad"] == mod_sel]
 
         st.write("")
         meses_grupos = sorted(df_filtrado["Mes_Periodo"].unique().tolist(), reverse=True)
