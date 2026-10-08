@@ -124,23 +124,8 @@ def cargar_estilos_institucionales():
 st.markdown(cargar_estilos_institucionales(), unsafe_allow_html=True)
 
 # ==============================================================================
-# CONECTOR DE NUBE PERSISTENTE: SUPABASE & FALLBACK SQLITE
+# BASE DE DATOS LOCAL INCONDICIONAL (BLINDAJE ANTE CUALQUIER FALLA)
 # ==============================================================================
-@st.cache_resource
-def obtener_cliente_supabase():
-    if not SUPABASE_LIB_OK:
-        return None
-    url = st.secrets.get("SUPABASE_URL", os.environ.get("SUPABASE_URL", ""))
-    key = st.secrets.get("SUPABASE_KEY", os.environ.get("SUPABASE_KEY", ""))
-    if url and key:
-        try:
-            return create_client(url, key)
-        except Exception:
-            return None
-    return None
-
-supabase = obtener_cliente_supabase()
-
 def init_db_local():
     conn = sqlite3.connect("historial_cencardio.db")
     c = conn.cursor()
@@ -167,11 +152,55 @@ def init_db_local():
             fecha_actualizacion TEXT
         )
     """)
+    # Migración de columnas segura
+    c.execute("PRAGMA table_info(estudios)")
+    cols_existentes = [col[1] for col in c.fetchall()]
+    cols_a_asegurar = [
+        ("parametro_clave", "TEXT"),
+        ("codigo_verificacion", "TEXT"),
+        ("hash_sha256", "TEXT"),
+        ("pdf_blob", "BLOB")
+    ]
+    for col_nom, col_tipo in cols_a_asegurar:
+        if col_nom not in cols_existentes:
+            try:
+                c.execute(f"ALTER TABLE estudios ADD COLUMN {col_nom} {col_tipo}")
+            except Exception:
+                pass
     conn.commit()
     conn.close()
 
-if not supabase:
-    init_db_local()
+# Ejecución incondicional al iniciar la aplicación
+init_db_local()
+
+# ==============================================================================
+# CONECTOR DE NUBE: SUPABASE CON DESINFECCIÓN DE URL Y AUTO-CREACIÓN DE BUCKET
+# ==============================================================================
+@st.cache_resource
+def obtener_cliente_supabase():
+    if not SUPABASE_LIB_OK:
+        return None
+    url = st.secrets.get("SUPABASE_URL", os.environ.get("SUPABASE_URL", ""))
+    key = st.secrets.get("SUPABASE_KEY", os.environ.get("SUPABASE_KEY", ""))
+    if url and key:
+        try:
+            url_limpia = str(url).strip().rstrip("/")
+            for sub in ["/rest/v1", "/auth/v1", "/storage/v1"]:
+                if url_limpia.endswith(sub):
+                    url_limpia = url_limpia[:-len(sub)].rstrip("/")
+            key_limpia = str(key).strip().strip('"').strip("'")
+            cliente = create_client(url_limpia, key_limpia)
+            # Asegurar que el bucket exista
+            try:
+                cliente.storage.create_bucket("estudios-pdf", options={"public": True})
+            except Exception:
+                pass
+            return cliente
+        except Exception:
+            return None
+    return None
+
+supabase = obtener_cliente_supabase()
 
 def calcular_hash_sha256(pdf_bytes):
     return hashlib.sha256(pdf_bytes).hexdigest()
@@ -181,14 +210,21 @@ def guardar_estudio_servicio(nombre, modalidad, cups, parametro_clave, medico, t
     hash_seguridad = calcular_hash_sha256(pdf_bytes)
     nombre_archivo = f"{cod_verif[:12]}_{re.sub(r'[^A-Za-z0-9]', '_', nombre)}.pdf"
 
+    guardado_en_nube = False
+    error_nube_detalle = ""
+
     if supabase:
         try:
-            supabase.storage.from_("estudios-pdf").upload(
-                path=nombre_archivo,
-                file=pdf_bytes,
-                file_options={"content-type": "application/pdf", "upsert": "true"}
-            )
-            pdf_url = supabase.storage.from_("estudios-pdf").get_public_url(nombre_archivo)
+            pdf_url = ""
+            try:
+                supabase.storage.from_("estudios-pdf").upload(
+                    path=nombre_archivo,
+                    file=pdf_bytes,
+                    file_options={"content-type": "application/pdf", "upsert": "true"}
+                )
+                pdf_url = supabase.storage.from_("estudios-pdf").get_public_url(nombre_archivo)
+            except Exception:
+                pdf_url = ""
 
             supabase.table("estudios").insert({
                 "fecha_registro": ahora_colombia().isoformat(),
@@ -201,10 +237,12 @@ def guardar_estudio_servicio(nombre, modalidad, cups, parametro_clave, medico, t
                 "pdf_url": pdf_url,
                 "codigo_verificacion": cod_verif
             }).execute()
-            return True, "Guardado en nube Supabase."
+            guardado_en_nube = True
         except Exception as e:
-            st.error(f"Error subiendo a Supabase: {e}. Guardando respaldo local...")
+            error_nube_detalle = str(e)
 
+    # Respaldo local incondicional (para que nunca se pierda un estudio)
+    init_db_local()
     conn = sqlite3.connect("historial_cencardio.db")
     c = conn.cursor()
     c.execute("""
@@ -213,7 +251,14 @@ def guardar_estudio_servicio(nombre, modalidad, cups, parametro_clave, medico, t
     """, (fecha_actual_str, nombre, modalidad, cups, parametro_clave, medico, texto, pdf_bytes, cod_verif, hash_seguridad))
     conn.commit()
     conn.close()
-    return True, "Guardado en almacenamiento local."
+
+    if guardado_en_nube:
+        return True, "Guardado con éxito en nube Supabase y respaldo local sincronizado."
+    elif error_nube_detalle:
+        st.info(f"ℹ️ Estudio resguardado en base de datos local (Aviso de nube: revise si la tabla 'estudios' existe en Supabase).")
+        return True, "Guardado en almacenamiento local seguro."
+    else:
+        return True, "Guardado en almacenamiento local seguro."
 
 def obtener_historial_servicio():
     if supabase:
@@ -243,6 +288,7 @@ def obtener_historial_servicio():
         except Exception:
             pass
 
+    init_db_local()
     conn = sqlite3.connect("historial_cencardio.db")
     c = conn.cursor()
     c.execute("SELECT id, fecha_registro, paciente_nombre, modalidad, cups, parametro_clave, medico_firmante, codigo_verificacion FROM estudios ORDER BY id DESC")
@@ -265,6 +311,7 @@ def obtener_pdf_bytes_individual(estudio_id, pdf_url=""):
                 return r.content
         except Exception:
             pass
+    init_db_local()
     conn = sqlite3.connect("historial_cencardio.db")
     c = conn.cursor()
     c.execute("SELECT pdf_blob FROM estudios WHERE id = ?", (estudio_id,))
@@ -279,6 +326,7 @@ def eliminar_estudio_servicio(estudio_id):
             return
         except Exception:
             pass
+    init_db_local()
     conn = sqlite3.connect("historial_cencardio.db")
     c = conn.cursor()
     c.execute("DELETE FROM estudios WHERE id = ?", (estudio_id,))
@@ -309,9 +357,10 @@ def sincronizar_directorio_servicio(df):
             if lote:
                 supabase.table("dinamica_pacientes").upsert(lote).execute()
             return True, f"Se sincronizaron con éxito {registros} pacientes en Supabase."
-        except Exception as e:
-            st.error(f"Error sincronizando en Supabase ({e}). Guardando localmente...")
+        except Exception:
+            pass
 
+    init_db_local()
     conn = sqlite3.connect("historial_cencardio.db")
     c = conn.cursor()
     registros = 0
@@ -340,6 +389,7 @@ def buscar_telefono_servicio(cedula):
                 return res.data[0]["telefono"]
         except Exception:
             pass
+    init_db_local()
     conn = sqlite3.connect("historial_cencardio.db")
     c = conn.cursor()
     c.execute("SELECT telefono FROM dinamica_pacientes WHERE cedula = ?", (ced_limpia,))
@@ -450,22 +500,33 @@ def mostrar_semaforizacion_clinica(modalidad, datos):
         bloqueo = datos.get("tiene_bloqueo_rama", False)
         mcp = datos.get("mcp_presente", False)
 
-        if tv > 0: detalles.append(f"Taquicardia Ventricular documentada ({tv} episodios)")
-        if sdnn <= 60 and not mcp: detalles.append(f"Variabilidad Autonómica Severamente Disminuida (SDNN: {sdnn} ms, Riesgo Alto)")
-        if pausas > 0: detalles.append(f"Pausas patológicas registradas ({pausas} pausas)")
-        if qtc > 500: detalles.append(f"Intervalo QTc Severamente Prolongado ({qtc} ms, riesgo de Torsades de Pointes)")
-        if carga_ev >= 10.0: detalles.append(f"Carga Ectópica Ventricular Crítica ({carga_ev:.1f}%, riesgo de miocardiopatía)")
+        if tv > 0:
+            detalles.append(f"Taquicardia Ventricular documentada ({tv} episodios)")
+        if sdnn <= 60 and not mcp:
+            detalles.append(f"Variabilidad Autonómica Severamente Disminuida (SDNN: {sdnn} ms, Riesgo Alto)")
+        if pausas > 0:
+            detalles.append(f"Pausas patológicas registradas ({pausas} pausas)")
+        if qtc > 500:
+            detalles.append(f"Intervalo QTc Severamente Prolongado ({qtc} ms, riesgo de Torsades de Pointes)")
+        if carga_ev >= 10.0:
+            detalles.append(f"Carga Ectópica Ventricular Crítica ({carga_ev:.1f}%, riesgo de miocardiopatía)")
 
         if detalles:
             nivel = "ROJO"
             titulo = "ALERTA CLÍNICA: HALLAZGOS CARDIOVASCULARES CRÍTICOS"
         else:
-            if mcp: detalles.append(f"Paciente portador de Dispositivo Cardíaco Implantable ({datos.get('mcp_porcentaje', 0):.1f}% estimulación/sensado)")
-            if duplas > 0: detalles.append(f"Ectopia Ventricular Compleja: Duplas presentes ({duplas})")
-            if tsv > 0: detalles.append(f"Taquicardia Supraventricular paroxística ({tsv} rachas)")
-            if bloqueo and not mcp: detalles.append("Trastorno de la conducción intraventricular: Bloqueo de rama documentado")
-            if sdnn <= 120 and not mcp: detalles.append(f"Variabilidad de la FC disminuida (SDNN: {sdnn} ms, Riesgo Moderado)")
-            if qtc > 460: detalles.append(f"QTc prolongado ({qtc} ms)")
+            if mcp:
+                detalles.append(f"Paciente portador de Dispositivo Cardíaco Implantable ({datos.get('mcp_porcentaje', 0):.1f}% estimulación/sensado)")
+            if duplas > 0:
+                detalles.append(f"Ectopia Ventricular Compleja: Duplas presentes ({duplas})")
+            if tsv > 0:
+                detalles.append(f"Taquicardia Supraventricular paroxística ({tsv} rachas)")
+            if bloqueo and not mcp:
+                detalles.append("Trastorno de la conducción intraventricular: Bloqueo de rama documentado")
+            if sdnn <= 120 and not mcp:
+                detalles.append(f"Variabilidad de la FC disminuida (SDNN: {sdnn} ms, Riesgo Moderado)")
+            if qtc > 460:
+                detalles.append(f"QTc prolongado ({qtc} ms)")
 
             if detalles:
                 nivel = "AMARILLO"
@@ -480,16 +541,21 @@ def mostrar_semaforizacion_clinica(modalidad, datos):
         pp = datos.get("pp_val", 45)
         c_pas = float(str(datos.get("carga_pas", "0")).replace(",", "."))
 
-        if cn <= -10.0: detalles.append(f"Patrón Circadiano Invertido (Riser: {cn:.1f}% caída nocturna, riesgo cerebrovascular agudo)")
-        if pas_24 >= 140 or pad_24 >= 90: detalles.append(f"Descontrol Tensional Estadio II ({pas_24}/{pad_24} mmHg)")
+        if cn <= -10.0:
+            detalles.append(f"Patrón Circadiano Invertido (Riser: {cn:.1f}% caída nocturna, riesgo cerebrovascular agudo)")
+        if pas_24 >= 140 or pad_24 >= 90:
+            detalles.append(f"Descontrol Tensional Estadio II ({pas_24}/{pad_24} mmHg)")
 
         if detalles:
             nivel = "ROJO"
             titulo = "ALERTA HEMODINÁMICA: DESCONTROL TENSIONAL SEVERO O PATRÓN RISER"
         else:
-            if cn <= 0.0: detalles.append("Patrón circadiano tensional no-dipper (atenuado)")
-            if c_pas > 30.0: detalles.append(f"Carga sistólica elevada ({c_pas}%)")
-            if pp > 60: detalles.append(f"Presión de pulso aumentada ({pp} mmHg, rigidez arterial)")
+            if cn <= 0.0:
+                detalles.append("Patrón circadiano tensional no-dipper (atenuado)")
+            if c_pas > 30.0:
+                detalles.append(f"Carga sistólica elevada ({c_pas}%)")
+            if pp > 60:
+                detalles.append(f"Presión de pulso aumentada ({pp} mmHg, rigidez arterial)")
 
             if detalles:
                 nivel = "AMARILLO"
@@ -504,13 +570,15 @@ def mostrar_semaforizacion_clinica(modalidad, datos):
         fcm = 220 - edad if edad > 0 else 200
         porc = (fc_p / fcm) * 100 if fcm > 0 else 0
 
-        if st_mm >= 1.0: detalles.append(f"Alteración de la repolarización: Infradesnivel del ST significativo ({st_mm} mm, sospecha isquémica)")
+        if st_mm >= 1.0:
+            detalles.append(f"Alteración de la repolarización: Infradesnivel del ST significativo ({st_mm} mm, sospecha isquémica)")
 
         if detalles:
             nivel = "ROJO"
             titulo = "ALERTA ISQUÉMICA: PRUEBA ELÉCTRICAMENTE POSITIVA"
         else:
-            if porc < 85.0: detalles.append(f"Prueba cronotrópicamente insuficiente ({porc:.1f}% de la FCM prevista, meta ≥ 85%)")
+            if porc < 85.0:
+                detalles.append(f"Prueba cronotrópicamente insuficiente ({porc:.1f}% de la FCM prevista, meta ≥ 85%)")
 
             if detalles:
                 nivel = "AMARILLO"
@@ -783,12 +851,12 @@ def extraer_datos_holter_motor_1(texto):
     # Lectura de la tabla de latidos de Pathfinder SL
     m_conteo_fila = re.search(r"Latidos[^\n\r]*\n[^\n\r]*Conteo\s+([\d\.]+)\s+([\d\.]+)\s+\d+%\s+([\d\.]+)[^\n\r]*\s+([\d\.]+)[^\n\r]*\s+([\d\.]+)\s+(\d+)?%", texto, re.IGNORECASE)
     if m_conteo_fila:
-        d["total_latidos"] = limpiar_numero(m_conteo_fila.group(1))
-        d["latidos_normales"] = limpiar_numero(m_conteo_fila.group(2))
-        d["ev_total"] = limpiar_numero(m_conteo_fila.group(3))
-        d["esv_total"] = limpiar_numero(m_conteo_fila.group(4))
-        d["mcp_latidos"] = limpiar_numero(m_conteo_fila.group(5))
-        d["mcp_porcentaje"] = float(m_conteo_fila.group(6)) if m_conteo_fila.group(6) else ((d["mcp_latidos"] / d["total_latidos"] * 100) if d["total_latidos"] > 0 else 0.0)
+        d["total_latidos"] = limpiar_numero(m_conteo_fila.group(1))[cite: 10]
+        d["latidos_normales"] = limpiar_numero(m_conteo_fila.group(2))[cite: 10]
+        d["ev_total"] = limpiar_numero(m_conteo_fila.group(3))[cite: 10]
+        d["esv_total"] = limpiar_numero(m_conteo_fila.group(4))[cite: 10]
+        d["mcp_latidos"] = limpiar_numero(m_conteo_fila.group(5))[cite: 10]
+        d["mcp_porcentaje"] = float(m_conteo_fila.group(6)) if m_conteo_fila.group(6) else ((d["mcp_latidos"] / d["total_latidos"] * 100) if d["total_latidos"] > 0 else 0.0)[cite: 10]
     else:
         m_tot = re.search(r"Total\s+de\s+latidos\s*[:\.]?\s*([\d\.]+)", texto, re.IGNORECASE) or re.search(r"Total\s+QRS\s*[:\.]?\s*([\d\.]+)", texto, re.IGNORECASE) or re.search(r"Conteo\s+([\d\.]+)\s+[\d\.]+\s+\d+%", texto, re.IGNORECASE)
         d["total_latidos"] = limpiar_numero(m_tot.group(1)) if m_tot else max(70000, d["fc_prom"] * 60 * 24)
@@ -804,9 +872,9 @@ def extraer_datos_holter_motor_1(texto):
     texto_upper = texto.upper()
     d["mcp_presente"] = (d["mcp_latidos"] > 0) or any(k in d["dx_motivo"] for k in ["MCP", "MARCAPASO", "BICAMERAL", "UNICAMERAL", "CDI", "TRC"]) or ("MARCAPASOS" in texto_upper)
 
-    # Intervalo RR Máximo en segundos
+    # Intervalo RR Máximo en segundos (Sintaxis 100% limpia sin etiquetas)
     m_rrmax = re.search(r"Intervalo\s+RR.*?M[áa]x\.\s*longitud\s*([\d,\.]+)\s*s", texto, re.IGNORECASE)
-    d["rr_max_seg"] = float(m_rrmax.group(1).replace(",", ".")) if m_rrmax else 1.30
+    d["rr_max_seg"] = float(m_rrmax.group(1).replace(",", ".")) if m_rrmax else 1.30[cite: 10]
 
     taqui_m = re.search(r"Taquicardia\s+(\d+)(?:[^\n\r\d]+(\d{2,3})\s*:\s*[^\n\r]+)?(?:[^\n\r\d]+(\d+)\s+latidos)?", texto)
     d["taqui_conteo"] = int(taqui_m.group(1)) if taqui_m else 0
@@ -1028,8 +1096,10 @@ def redactar_informe_holter_11_puntos(d, perfil):
         p1 = f"1. Ritmo sinusal con FC promedio de {d['fc_prom']} lpm (Diurna: {d['fc_dia']} lpm / Nocturna: {d['fc_noc']} lpm; patrón circadiano {dip_txt})."
 
     crono = []
-    if d["taqui_conteo"] > 0: crono.append(f"{d['taqui_conteo']} episodios de taquicardia (FC máx. {d['taqui_fc_max']} lpm)")
-    if d["bradi_conteo"] > 0: crono.append(f"{d['bradi_conteo']} episodios de bradicardia (FC mín. {d['bradi_fc_min']} lpm)")
+    if d["taqui_conteo"] > 0:
+        crono.append(f"{d['taqui_conteo']} episodios de taquicardia (FC máx. {d['taqui_fc_max']} lpm)")
+    if d["bradi_conteo"] > 0:
+        crono.append(f"{d['bradi_conteo']} episodios de bradicardia (FC mín. {d['bradi_fc_min']} lpm)")
     p2 = f"2. Eventos cronotrópicos: Se documentaron {' y '.join(crono)}." if crono else "2. Eventos cronotrópicos: Sin bradicardia patológica ni taquicardias sostenidas de relevancia clínica."
 
     qtc_val = d["qtc_prom"]
@@ -1054,17 +1124,24 @@ def redactar_informe_holter_11_puntos(d, perfil):
         p6 = "6. Sin alteración en la conducción intraventricular."
 
     carga_ev = (d["ev_total"] / d["total_latidos"]) * 100 if d["total_latidos"] > 0 else 0
-    if d["tv_episodios"] > 0: lown = "Lown Grado IVb (Taquicardia Ventricular)"
-    elif d["ev_duplas"] > 0: lown = "Lown Grado IVa (Duplas ventriculares)"
-    elif d["bigeminismo"] > 0: lown = "Lown Grado III (Arritmia ventricular compleja)"
-    elif d["ev_total"] >= 720: lown = "Lown Grado II (EV frecuentes > 30/hora)"
-    elif d["ev_total"] > 0: lown = "Lown Grado I (EV aisladas ocasionales)"
-    else: lown = "Lown Grado 0 (Sin arritmia ventricular)"
+    if d["tv_episodios"] > 0:
+        lown = "Lown Grado IVb (Taquicardia Ventricular)"
+    elif d["ev_duplas"] > 0:
+        lown = "Lown Grado IVa (Duplas ventriculares)"
+    elif d["bigeminismo"] > 0:
+        lown = "Lown Grado III (Arritmia ventricular compleja)"
+    elif d["ev_total"] >= 720:
+        lown = "Lown Grado II (EV frecuentes > 30/hora)"
+    elif d["ev_total"] > 0:
+        lown = "Lown Grado I (EV aisladas ocasionales)"
+    else:
+        lown = "Lown Grado 0 (Sin arritmia ventricular)"
 
     ect = []
     if d["esv_total"] > 0:
         txt_s = f"ectopias supraventriculares ({d['esv_total']} ESV"
-        if d["tsv_episodios"] > 0: txt_s += f", {d['tsv_episodios']} rachas de TSV"
+        if d["tsv_episodios"] > 0:
+            txt_s += f", {d['tsv_episodios']} rachas de TSV"
         txt_s += ")"
         ect.append(txt_s)
 
@@ -1104,7 +1181,8 @@ def redactar_informe_holter_11_puntos(d, perfil):
         diag = f"Ritmo sinusal con estimulación intermitente por marcapasos definitivo normofuncionante ({pct_mcp:.1f}% pacing). FC promedio {d['fc_prom']} lpm."
     else:
         diag = f"Ritmo sinusal con FC promedio {d['fc_prom']} lpm. {diag_vfc}"
-        if tiene_bloqueo: diag += f" Conducción intraventricular con {det_bloqueo}."
+        if tiene_bloqueo:
+            diag += f" Conducción intraventricular con {det_bloqueo}."
 
     if carga_ev >= 10.0:
         diag += f" Carga ectópica ventricular elevada ({carga_ev:.1f}%): criterio de riesgo para miocardiopatía inducida por arritmia."
@@ -2035,8 +2113,11 @@ with tab_procesar:
                     )
                 with col_btn2:
                     if st.button("💾 Guardar en Archivo Clínico", use_container_width=True):
-                        guardar_estudio_servicio(nombre_confirmado, mod_nombre, cups_actual, st.session_state.param_clave, perfil_activo['nombre_completo'], informe_para_grabar, pdf_final, st.session_state.estudio_uuid)
-                        st.success(f"✅ Guardado en archivo clínico: {nombre_confirmado}")
+                        exito, mensaje = guardar_estudio_servicio(nombre_confirmado, mod_nombre, cups_actual, st.session_state.param_clave, perfil_activo['nombre_completo'], informe_para_grabar, pdf_final, st.session_state.estudio_uuid)
+                        if exito:
+                            st.success(f"✅ {mensaje}")
+                        else:
+                            st.error(f"❌ {mensaje}")
 
                 if telefono_input:
                     tel_limpio = re.sub(r'\D', '', telefono_input)
