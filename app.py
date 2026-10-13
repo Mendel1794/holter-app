@@ -24,6 +24,7 @@ TZ_COLOMBIA = timezone(timedelta(hours=-5))
 def ahora_colombia():
     return datetime.now(TZ_COLOMBIA)
 
+# Importación segura de openpyxl (Excel Avanzado)
 try:
     import openpyxl
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -32,6 +33,7 @@ try:
 except ImportError:
     OPENPYXL_INSTALADO = False
 
+# Importación segura de Supabase (Nube)
 try:
     from supabase import create_client, Client
     SUPABASE_LIB_OK = True
@@ -392,20 +394,17 @@ def generar_grafica_tacograma(d):
     return fig
 
 # ==============================================================================
-# MOTOR 1: EXTRACTOR DETERMINÍSTICO C++ (BLINDADO SPACELABS)
+# MOTOR 1: EXTRACTOR DETERMINÍSTICO C++ (CON LECTURA A PRUEBA DE PIPES)
 # ==============================================================================
 def limpiar_numero(val_str, tipo=int):
     if not val_str: return None
     s = str(val_str).strip()
-    
-    # Manejo estricto de miles Spacelabs (ej: 62.218 -> 62218)
     if re.match(r'^\d{1,3}\.\d{3}$', s): 
         s = s.replace(".", "")
     elif "," in s and "." in s: 
         s = s.replace(".", "").replace(",", ".")
     elif "," in s: 
         s = s.replace(",", ".")
-        
     try: return tipo(float(s))
     except Exception: return None
 
@@ -427,13 +426,14 @@ def extraer_m1_holter(texto):
     m_id = re.search(r"(?:ID\s*Paciente|ID|C\.?C\.?|Doc\.?|Historia)\s*[:\.]?\s*(\d{5,12})", texto, re.IGNORECASE)
     d["cedula"] = m_id.group(1) if m_id else None
 
-    d["fc_prom"] = extraer_numero(r"Prom\.\.?\s*(\d{2,3})", txt_flat, int)
-    d["fc_max"]  = extraer_numero(r"M[áa]x\s*(\d{2,3})", txt_flat, int)
-    d["fc_min"]  = extraer_numero(r"M[íi]n\s*(\d{2,3})", txt_flat, int)
-    d["fc_dia"]  = extraer_numero(r"D[íi]a.*?Prom\.\.?\s*(\d{2,3})", txt_flat, int)
-    d["fc_noc"]  = extraer_numero(r"Noche.*?Prom\.\.?\s*(\d{2,3})", txt_flat, int)
+    # Cruzan espacios y pipes (|) para resistir el formato Spacelabs
+    d["fc_prom"] = extraer_numero(r"Prom\.\.?[\s\|]*(\d{2,3})", txt_flat, int)
+    d["fc_max"]  = extraer_numero(r"M[áa]x[\s\|]*(\d{2,3})", txt_flat, int)
+    d["fc_min"]  = extraer_numero(r"M[íi]n[\s\|]*(\d{2,3})", txt_flat, int)
+    d["fc_dia"]  = extraer_numero(r"D[íi]a.*?Prom\.\.?[\s\|]*(\d{2,3})", txt_flat, int)
+    d["fc_noc"]  = extraer_numero(r"Noche.*?Prom\.\.?[\s\|]*(\d{2,3})", txt_flat, int)
 
-    # TABLA DE LATIDOS SPACELABS (Extracción dinámica de columnas)
+    # TABLA DE LATIDOS SPACELABS
     m_conteo_line = re.search(r"Conteo\s*[:\|]?\s*(.*?)(?:Máx|Intervalo|FC)", txt_flat, re.IGNORECASE)
     if m_conteo_line:
         tokens = [t for t in re.split(r'[\s\|]+', m_conteo_line.group(1).strip()) if t]
@@ -462,28 +462,26 @@ def extraer_m1_holter(texto):
     d["mcp_presente"] = True if ((d.get("mcp_latidos") and d["mcp_latidos"] > 0) or (d.get("mcp_porcentaje") and d["mcp_porcentaje"] > 0) or mcp_en_dx) else False
 
     d["rr_max_seg"] = extraer_numero(r"Intervalo RR.*?M[áa]x\.\s*longitud\s*([\d,\.]+)\s*s", txt_flat, float)
-    d["pausas"] = extraer_numero(r"\bPausas?\s*(?:\|\s*)?(\d+)", txt_flat, int)
-    d["tv_episodios"] = extraer_numero(r"\bTV\s*(?:\|\s*)?([\d\.,]+)", txt_flat, int)
-    d["ev_duplas"] = extraer_numero(r"Apareado\s*(?:\|\s*)?([\d\.,]+)", txt_flat, int)
-    d["tsv_episodios"] = extraer_numero(r"\bTSV\s*(?:\|\s*)?([\d\.,]+)", txt_flat, int)
-    d["taqui_conteo"] = extraer_numero(r"\bTaquicardia\s*(?:\|\s*)?(\d+)", txt_flat, int)
-    d["bradi_conteo"] = extraer_numero(r"\bBradicardia\s*(?:\|\s*)?(\d+)", txt_flat, int)
+    d["pausas"] = extraer_numero(r"\bPausas?[\s\|]*(\d+)", txt_flat, int)
+    d["tv_episodios"] = extraer_numero(r"\bTV[\s\|]*([\d\.,]+)", txt_flat, int)
+    d["ev_duplas"] = extraer_numero(r"Apareado[\s\|]*([\d\.,]+)", txt_flat, int)
+    d["tsv_episodios"] = extraer_numero(r"\bTSV[\s\|]*([\d\.,]+)", txt_flat, int)
+    d["taqui_conteo"] = extraer_numero(r"\bTaquicardia[\s\|]*(\d+)", txt_flat, int)
+    d["bradi_conteo"] = extraer_numero(r"\bBradicardia[\s\|]*(\d+)", txt_flat, int)
     
-    # EXTRACCIÓN AVANZADA DE SDNN Y QTc (Escaneo Múltiple)
+    # EXTRACCIÓN AVANZADA DE SDNN Y QTc (Busca el valor real y no la tabla vacía de Spacelabs)
     d["sdnn_24h"] = None
-    sdnns = re.findall(r"Valor de 24 horas\s*(?:\|\s*)?[\d\.,]+\s*(?:\|\s*)?([\d\.,]+)", txt_flat)
-    if sdnns:
-        sdnn_list = [int(x.replace(".","").replace(",","")) for x in sdnns if x.replace(".","").replace(",","").isdigit() and int(x.replace(".","").replace(",","")) > 0]
-        if sdnn_list: d["sdnn_24h"] = max(sdnn_list)
+    m_sdnn = re.search(r"Valor de 24 horas[\s\|]+[\d\.,]+[\s\|]+([\d\.,]+)", txt_flat, re.IGNORECASE)
+    if m_sdnn:
+        d["sdnn_24h"] = limpiar_numero(m_sdnn.group(1), int)
             
     d["qtc_prom"] = None
-    qtcs = re.findall(r"Todos los per[íi]odos\s*(?:\|\s*)?[\d\.,]+\s*(?:\|\s*)?[\d\.,]+\s*(?:\|\s*)?([\d\.,]+)", txt_flat)
-    if qtcs:
-        qtc_list = [int(x.replace(".","").replace(",","")) for x in qtcs if x.replace(".","").replace(",","").isdigit() and int(x.replace(".","").replace(",","")) > 0]
-        if qtc_list: d["qtc_prom"] = max(qtc_list)
+    m_qtc = re.search(r"Todos los per[íi]odos[\s\|]+[\d\.,]+[\s\|]+[\d\.,]+[\s\|]+([\d\.,]+)", txt_flat, re.IGNORECASE)
+    if m_qtc:
+        d["qtc_prom"] = limpiar_numero(m_qtc.group(1), int)
 
-    d["st_dep_episodios"] = extraer_numero(r"Depresi[óo]n ST\s*(?:\|\s*)?(\d+)", txt_flat, int)
-    d["st_elev_episodios"] = extraer_numero(r"Elevaci[óo]n ST\s*(?:\|\s*)?(\d+)", txt_flat, int)
+    d["st_dep_episodios"] = extraer_numero(r"Depresi[óo]n ST[\s\|]*(\d+)", txt_flat, int)
+    d["st_elev_episodios"] = extraer_numero(r"Elevaci[óo]n ST[\s\|]*(\d+)", txt_flat, int)
     
     bloqueo_keys = ["BLOQUEO DE RAMA", "BRD", "BRI", "BCRD", "BCRI", "QRS ANCHO", "CONDUCCION INTRAVENTRICULAR"]
     d["tiene_bloqueo_rama"] = any(k in dx_text for k in bloqueo_keys)
@@ -518,7 +516,7 @@ def extraer_m1_esfuerzo(texto):
     return d
 
 # ==============================================================================
-# MOTOR 2: INTELIGENCIA ARTIFICIAL GEMINI (RENDERIZADO 100% DINÁMICO)
+# MOTOR 2: INTELIGENCIA ARTIFICIAL GEMINI
 # ==============================================================================
 def consultar_gemini_json(prompt_text, inline_items=None):
     key = str(st.secrets.get("GEMINI_API_KEY", os.environ.get("GEMINI_API_KEY", ""))).strip().strip('"').strip("'")
@@ -560,25 +558,9 @@ def ejecutar_extraccion_multimodal(archivos_fotos):
             inline_items.append({"inline_data": {"mime_type": "image/jpeg", "data": b64_img}})
         except Exception: continue
 
-    prompt = """Eres un Cardiólogo especialista en Ergometría del Centro Cardiovascular Colombiano CENCARDIO.
-Analiza con máxima rigurosidad las fotografías adjuntas (trazados continuos de esfuerzo y notas manuscritas en post-it).
-Extrae los siguientes parámetros clínicos exactos:
-- Nombre del paciente en mayúsculas
-- Cédula / PID (solo números)
-- Edad (número entero)
-- Sexo ("Femenino" o "Masculino")
-- Protocolo ("Bruce")
-- Etapa alcanzada (ej: "Etapa 6" o "Etapa 4")
-- Tiempo total en minutos como número decimal (ej: si son 16:14 convierte a 16.23; si son 12:30 a 12.5; si son 9:34 a 9.57)
-- Frecuencia Cardíaca Basal en reposo (FC Basal en lpm)
-- Frecuencia Cardíaca Pico en esfuerzo máximo (FC Pico en lpm)
-- Presión Arterial Basal (PAS y PAD basal en mmHg)
-- Presión Arterial Pico de esfuerzo (PAS y PAD pico en mmHg)
-- Desviación del segmento ST (en mm, ej: 0.0)
-
-Devuelve ÚNICAMENTE un objeto JSON:
+    prompt = """Eres un Cardiólogo especialista. Extrae los parámetros exactos de las fotos y devuelve ÚNICAMENTE JSON:
 {
-  "paciente": "KAROL JULIANA SUAREZ FARFAN", "cedula": "1050095219", "edad": 17, "sexo": "Femenino",
+  "paciente": "KAROL JULIANA", "cedula": "1050095219", "edad": 17, "sexo": "Femenino",
   "protocolo": "Bruce", "etapa": "Etapa 6", "tiempo_min": 16.23, "fc_basal": 91, "fc_pico": 194,
   "pas_basal": 119, "pad_basal": 70, "pas_pico": 140, "pad_pico": 87, "st_mm": 0.0
 }"""
@@ -592,7 +574,7 @@ Devuelve ÚNICAMENTE un objeto JSON:
     return False, "No se pudo completar el análisis."
 
 # ==============================================================================
-# MOTOR 3: NÚCLEO DE ARBITRAJE MATEMÁTICO UNIVERSAL (NULOS ESTRICTOS)
+# MOTOR 3: NÚCLEO DE ARBITRAJE MATEMÁTICO UNIVERSAL
 # ==============================================================================
 def arbitrar_valor(k, v1, v2, tipo, default_val, criticidad="alta"):
     if v1 is None and v2 is None:
@@ -763,7 +745,7 @@ Devuelve JSON estricto (null si el dato no está):
     return d_final
 
 # ==============================================================================
-# REDACTORES INSTITUCIONALES (DISEÑADOS A LA MEDIDA CLÍNICA)
+# REDACTORES INSTITUCIONALES (PLANTILLAS EXACTAS DEL DR. AMAYA)
 # ==============================================================================
 def redactar_informe_holter_11_puntos(d, perfil):
     fc_p = d.get("fc_prom")
@@ -779,8 +761,9 @@ def redactar_informe_holter_11_puntos(d, perfil):
         dip_txt = f" (Día: {fc_d} / Noche: {fc_n}; patrón circadiano {patron} con {desc_crono:.1f}% de descenso)"
 
     pct_mcp = d.get("mcp_porcentaje") or 0.0
-    pausas = d.get("pausas", 0)
+    pausas = d.get("pausas") or 0
     
+    # PUNTO 1 (RITMO)
     if d.get("mcp_presente") and pct_mcp >= 80.0: 
         p1 = f"1. Ritmo comandado por marcapasos definitivo (electroestimulado/sensado en {pct_mcp:.1f}%) con adecuado sensado y captura con FC promedio {fc_p_str} lpm{dip_txt}."
     elif d.get("mcp_presente"): 
@@ -789,15 +772,16 @@ def redactar_informe_holter_11_puntos(d, perfil):
     else: 
         p1 = f"1. Ritmo sinusal con FC promedio {fc_p_str} lpm{dip_txt}."
 
+    # PUNTO 2
     crono = []
     if d.get("taqui_conteo", 0) > 0: crono.append(f"{d.get('taqui_conteo')} episodios de taquicardia (FC máx {d.get('taqui_fc_max') or d.get('fc_max') or 0} lpm)")
     if d.get("bradi_conteo", 0) > 0: crono.append(f"{d.get('bradi_conteo')} episodios de bradicardia (FC mín {d.get('bradi_fc_min') or d.get('fc_min') or 0} lpm)")
     p2 = f"2. Eventos cronotrópicos: Se documentaron {' y '.join(crono)}." if crono else "2. Eventos cronotrópicos: Sin bradicardia patológica ni taquicardias sostenidas."
 
+    # PUNTO 3 (EXACTO)
     qtc = d.get("qtc_prom")
     if qtc is not None and qtc > 500: p3 = f"3. Intervalos PR normales y QTc SEVERAMENTE PROLONGADO ({qtc} ms: alto riesgo proarrítmico)."
     elif qtc is not None and qtc > 460: p3 = f"3. Intervalos PR normales y QTc prolongado ({qtc} ms)."
-    elif qtc is not None and qtc > 0: p3 = f"3. Intervalos PR normales y QTc normal ({qtc} ms)."
     else: p3 = "3. Intervalos PR normales y QTc conservados."
 
     p4 = f"4. Alteraciones isquémicas del ST ({d.get('st_episodios',0)} eventos)." if d.get("st_episodios",0) > 0 else "4. Sin alteraciones isquémicas del segmento ST."
@@ -825,10 +809,11 @@ def redactar_informe_holter_11_puntos(d, perfil):
     if ev_pac is not None and ev_pac > 0: p8 = f"8. Diario paciente: {ev_pac} eventos marcados."
     else: p8 = "8. No refirió síntomas."
 
+    # PUNTO 9 Y 11 (VFC SIEMPRE VALORADA, CON RANGOS CLÍNICOS PRECISOS)
     sdnn = d.get("sdnn_24h")
     mod_mcp = " (Modificada por estimulación de marcapasos)." if d.get("mcp_presente") else "."
     
-    if sdnn is None or sdnn == 0:
+    if sdnn is None:
         p9 = f"9. Variabilidad de la frecuencia cardíaca conservada{mod_mcp}"
         p11 = "11. Riesgo del paciente SDNN 20 a 24 hrs ( Riesgo Bajo )."
         d_vfc = "VFC conservada."
@@ -845,6 +830,7 @@ def redactar_informe_holter_11_puntos(d, perfil):
         p11 = "11. Riesgo del paciente SDNN 20 a 24 hrs ( Riesgo Bajo )."
         d_vfc = "VFC conservada."
 
+    # PUNTO 10 (EXACTO)
     if pausas > 0:
         p10 = f"10. Se registraron {pausas} pausas significativas (máx {d.get('pausa_max_seg') or 0.0}s)."
     else:
@@ -1165,7 +1151,7 @@ def generar_excel_avanzado_produccion(df_base):
     return output.getvalue(), "xlsx"
 
 # ==============================================================================
-# UI PRINCIPAL Y BARRERA DE LOGIN
+# UI PRINCIPAL: BARRERA DE LOGIN Y NAVEGACIÓN
 # ==============================================================================
 LISTA_ESPECIALISTAS = [
     {"id": "dr.amaya", "etiqueta": "Dr. William Amaya Ramirez", "clave": "Cardio2025*", "nombre_completo": "DR. WILLIAM AMAYA RAMIREZ", "especialidad": "INTERNISTA - CARDIÓLOGO", "registro": "RM 79.502.624 SDS"},
@@ -1203,7 +1189,7 @@ if not st.session_state.autenticado:
                 if m["clave"] == pwd:
                     st.session_state.autenticado = True; st.session_state.usuario_actual = m["id"]
                     st.rerun()
-                else: st.error("❌ Contraseña incorrecta.")
+                else: st.error("❌ Contraseña incorrecta para el especialista seleccionado.")
         st.markdown('</div>', unsafe_allow_html=True)
     st.stop()
 
@@ -1231,7 +1217,7 @@ st.markdown(f'<div class="top-hospital-bar"><div><div style="font-size:1.35rem; 
 tab_procesar, tab_historial = st.tabs(["📥 Procesamiento del Estudio", "📁 Archivo Clínico & Reportes"])
 
 # ==============================================================================
-# PESTAÑA 1: PROCESAMIENTO (HOLTER, MAPA Y ESFUERZO INTEGRADOS)
+# PESTAÑA 1: PROCESAMIENTO (HOLTER, MAPA Y ESFUERZO)
 # ==============================================================================
 with tab_procesar:
     if "Esfuerzo" in mod_sel:
@@ -1327,7 +1313,7 @@ with tab_procesar:
         if up_file:
             b_pdf = up_file.getvalue()
             if st.session_state.get("last_file") != up_file.name:
-                with st.spinner("🚀 Ejecutando TRIPLE ENGINE (Extracción al 100% Sin Suposiciones)..."):
+                with st.spinner("🚀 Ejecutando TRIPLE ENGINE (Extracción Precisa + IA 100% PDF + Auditoría Silenciosa)..."):
                     mod = "HOLTER" if "Holter" in mod_sel else "MAPA"
                     d_final = ejecutar_triple_engine_universal(b_pdf, mod)
                     st.session_state.d_final = d_final
