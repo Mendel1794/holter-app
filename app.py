@@ -318,7 +318,7 @@ def mostrar_semaforizacion_clinica(modalidad, datos):
         mcp = datos.get("mcp_presente", False)
 
         if tv and tv > 0: detalles.append(f"Taquicardia Ventricular documentada ({tv} episodios)")
-        if sdnn is not None and sdnn < 30 and not mcp: detalles.append(f"Variabilidad Autonómica Severamente Disminuida (SDNN: {sdnn} ms, Riesgo Alto)")
+        if sdnn is not None and sdnn > 0 and sdnn < 30 and not mcp: detalles.append(f"Variabilidad Autonómica Severamente Disminuida (SDNN: {sdnn} ms, Riesgo Alto)")
         if pausas and pausas > 0: detalles.append(f"Pausas patológicas registradas ({pausas} pausas)")
         if qtc is not None and qtc > 500: detalles.append(f"Intervalo QTc Severamente Prolongado ({qtc} ms, riesgo proarrítmico)")
         if carga_ev >= 10.0: detalles.append(f"Carga Ectópica Ventricular Crítica ({carga_ev:.1f}%)")
@@ -394,17 +394,19 @@ def generar_grafica_tacograma(d):
     return fig
 
 # ==============================================================================
-# MOTOR 1: EXTRACTOR DETERMINÍSTICO C++ (CON LECTURA A PRUEBA DE PIPES)
+# MOTOR 1: EXTRACTOR DETERMINÍSTICO C++ (BLINDADO SPACELABS)
 # ==============================================================================
 def limpiar_numero(val_str, tipo=int):
     if not val_str: return None
     s = str(val_str).strip()
+    
     if re.match(r'^\d{1,3}\.\d{3}$', s): 
         s = s.replace(".", "")
     elif "," in s and "." in s: 
         s = s.replace(".", "").replace(",", ".")
     elif "," in s: 
         s = s.replace(",", ".")
+        
     try: return tipo(float(s))
     except Exception: return None
 
@@ -426,14 +428,12 @@ def extraer_m1_holter(texto):
     m_id = re.search(r"(?:ID\s*Paciente|ID|C\.?C\.?|Doc\.?|Historia)\s*[:\.]?\s*(\d{5,12})", texto, re.IGNORECASE)
     d["cedula"] = m_id.group(1) if m_id else None
 
-    # Cruzan espacios y pipes (|) para resistir el formato Spacelabs
     d["fc_prom"] = extraer_numero(r"Prom\.\.?[\s\|]*(\d{2,3})", txt_flat, int)
     d["fc_max"]  = extraer_numero(r"M[áa]x[\s\|]*(\d{2,3})", txt_flat, int)
     d["fc_min"]  = extraer_numero(r"M[íi]n[\s\|]*(\d{2,3})", txt_flat, int)
     d["fc_dia"]  = extraer_numero(r"D[íi]a.*?Prom\.\.?[\s\|]*(\d{2,3})", txt_flat, int)
     d["fc_noc"]  = extraer_numero(r"Noche.*?Prom\.\.?[\s\|]*(\d{2,3})", txt_flat, int)
 
-    # TABLA DE LATIDOS SPACELABS
     m_conteo_line = re.search(r"Conteo\s*[:\|]?\s*(.*?)(?:Máx|Intervalo|FC)", txt_flat, re.IGNORECASE)
     if m_conteo_line:
         tokens = [t for t in re.split(r'[\s\|]+', m_conteo_line.group(1).strip()) if t]
@@ -456,7 +456,6 @@ def extraer_m1_holter(texto):
         d["mcp_porcentaje"]= extraer_numero(r"Marcapaso.*?([\d\.]+)\s*%", txt_flat, float)
         d["latidos_normales"] = None
 
-    # DIAGNÓSTICO ESTRICTO DE MARCAPASOS
     dx_text = texto[:2000].upper()
     mcp_en_dx = bool(re.search(r'(?:DX|DIAGN[ÓO]STICO|INDICACI[ÓO]N|COMENTARIOS).*?\b(MCP|MARCAPASO|MARCAPASOS|TRC|CDI)\b', dx_text))
     d["mcp_presente"] = True if ((d.get("mcp_latidos") and d["mcp_latidos"] > 0) or (d.get("mcp_porcentaje") and d["mcp_porcentaje"] > 0) or mcp_en_dx) else False
@@ -469,7 +468,6 @@ def extraer_m1_holter(texto):
     d["taqui_conteo"] = extraer_numero(r"\bTaquicardia[\s\|]*(\d+)", txt_flat, int)
     d["bradi_conteo"] = extraer_numero(r"\bBradicardia[\s\|]*(\d+)", txt_flat, int)
     
-    # EXTRACCIÓN AVANZADA DE SDNN Y QTc (Busca el valor real y no la tabla vacía de Spacelabs)
     d["sdnn_24h"] = None
     m_sdnn = re.search(r"Valor de 24 horas[\s\|]+[\d\.,]+[\s\|]+([\d\.,]+)", txt_flat, re.IGNORECASE)
     if m_sdnn:
@@ -578,12 +576,9 @@ def ejecutar_extraccion_multimodal(archivos_fotos):
 # ==============================================================================
 def arbitrar_valor(k, v1, v2, tipo, default_val, criticidad="alta"):
     if v1 is None and v2 is None:
-        if criticidad == "baja":
-            return default_val, None
-        elif criticidad == "media":
-            return default_val, f"⚠️ AVISO: No se detectó '{k}'. Se asume {default_val}."
-        else:
-            return default_val, f"🚨 CRÍTICO: Ningún motor encontró '{k}'. Verifique archivo."
+        if criticidad == "baja": return default_val, None
+        elif criticidad == "media": return default_val, f"⚠️ AVISO: No se detectó '{k}'. Se asume {default_val}."
+        else: return default_val, f"🚨 CRÍTICO: Ningún motor encontró '{k}'. Verifique archivo."
 
     if v1 is not None and v2 is not None:
         if v1 == v2: return v1, None
@@ -717,12 +712,12 @@ def ejecutar_triple_engine_universal(pdf_bytes, modalidad="HOLTER"):
 
     if modalidad == "HOLTER":
         prompt_ia = f"""Eres Auditor Médico Jefe. Analiza las {total_pags} imágenes y el texto de este Holter 24h.
-Texto: {texto_completo}
+Texto: {texto_completo[:15000]}
 Devuelve JSON estricto (Usa 'null' obligatoriamente si el dato NO está explícito. NO inventes 0):
 {{"paciente": "str", "cedula": "str", "mcp_presente": bool, "mcp_latidos": int, "mcp_porcentaje": float, "fc_prom": int, "fc_dia": int, "fc_noc": int, "fc_max": int, "fc_min": int, "total_latidos": int, "latidos_normales": int, "pausas": int, "rr_max_seg": float, "ev_total": int, "tv_episodios": int, "ev_duplas": int, "esv_total": int, "tsv_episodios": int, "sdnn_24h": int, "qtc_prom": int, "st_dep_episodios": int, "st_elev_episodios": int, "eventos_paciente": int, "tiene_bloqueo_rama": bool}}"""
     elif modalidad == "MAPA":
         prompt_ia = f"""Eres Auditor Médico Jefe. Analiza las {total_pags} imágenes y el texto de este MAPA.
-Texto: {texto_completo}
+Texto: {texto_completo[:10000]}
 Devuelve JSON estricto (null si el dato no está):
 {{"paciente": "str", "cedula": "str", "pas_24h": int, "pad_24h": int, "carga_pas": float, "carga_pad": float, "pp_val": int, "caida_nocturna_val": float, "pas_max_sueno": int, "pad_max_sueno": int}}"""
     else:
@@ -762,26 +757,25 @@ def redactar_informe_holter_11_puntos(d, perfil):
 
     pct_mcp = d.get("mcp_porcentaje") or 0.0
     pausas = d.get("pausas") or 0
+    txt_sensado = " con adecuado sensado y captura" if pausas == 0 else ""
     
-    # PUNTO 1 (RITMO)
     if d.get("mcp_presente") and pct_mcp >= 80.0: 
-        p1 = f"1. Ritmo comandado por marcapasos definitivo (electroestimulado/sensado en {pct_mcp:.1f}%) con adecuado sensado y captura con FC promedio {fc_p_str} lpm{dip_txt}."
+        p1 = f"1. Ritmo comandado por marcapasos definitivo (electroestimulado/sensado en {pct_mcp:.1f}%){txt_sensado} con FC promedio {fc_p_str} lpm{dip_txt}."
     elif d.get("mcp_presente"): 
-        pct_str = f" ({pct_mcp:.1f}% mediado por MCP)" if pct_mcp > 0 else ""
-        p1 = f"1. Ritmo sinusal alternando con electroestimulación con presencia de MCP{pct_str} con adecuado sensado y captura con FC promedio {fc_p_str} lpm{dip_txt}."
+        pct_str = f" ({pct_mcp:.1f}% mediado por MCP)" if pct_mcp > 0 else " con presencia de MCP"
+        p1 = f"1. Ritmo sinusal alternando con electroestimulación{pct_str}{txt_sensado} con FC promedio {fc_p_str} lpm{dip_txt}."
     else: 
         p1 = f"1. Ritmo sinusal con FC promedio {fc_p_str} lpm{dip_txt}."
 
-    # PUNTO 2
     crono = []
     if d.get("taqui_conteo", 0) > 0: crono.append(f"{d.get('taqui_conteo')} episodios de taquicardia (FC máx {d.get('taqui_fc_max') or d.get('fc_max') or 0} lpm)")
     if d.get("bradi_conteo", 0) > 0: crono.append(f"{d.get('bradi_conteo')} episodios de bradicardia (FC mín {d.get('bradi_fc_min') or d.get('fc_min') or 0} lpm)")
     p2 = f"2. Eventos cronotrópicos: Se documentaron {' y '.join(crono)}." if crono else "2. Eventos cronotrópicos: Sin bradicardia patológica ni taquicardias sostenidas."
 
-    # PUNTO 3 (EXACTO)
     qtc = d.get("qtc_prom")
     if qtc is not None and qtc > 500: p3 = f"3. Intervalos PR normales y QTc SEVERAMENTE PROLONGADO ({qtc} ms: alto riesgo proarrítmico)."
     elif qtc is not None and qtc > 460: p3 = f"3. Intervalos PR normales y QTc prolongado ({qtc} ms)."
+    elif qtc is not None and qtc > 0: p3 = f"3. Intervalos PR normales y QTc normal ({qtc} ms)."
     else: p3 = "3. Intervalos PR normales y QTc conservados."
 
     p4 = f"4. Alteraciones isquémicas del ST ({d.get('st_episodios',0)} eventos)." if d.get("st_episodios",0) > 0 else "4. Sin alteraciones isquémicas del segmento ST."
@@ -809,14 +803,13 @@ def redactar_informe_holter_11_puntos(d, perfil):
     if ev_pac is not None and ev_pac > 0: p8 = f"8. Diario paciente: {ev_pac} eventos marcados."
     else: p8 = "8. No refirió síntomas."
 
-    # PUNTO 9 Y 11 (VFC SIEMPRE VALORADA, CON RANGOS CLÍNICOS PRECISOS)
     sdnn = d.get("sdnn_24h")
     mod_mcp = " (Modificada por estimulación de marcapasos)." if d.get("mcp_presente") else "."
     
-    if sdnn is None:
-        p9 = f"9. Variabilidad de la frecuencia cardíaca conservada{mod_mcp}"
-        p11 = "11. Riesgo del paciente SDNN 20 a 24 hrs ( Riesgo Bajo )."
-        d_vfc = "VFC conservada."
+    if sdnn is None or sdnn == 0:
+        p9 = f"9. Variabilidad de la frecuencia cardíaca disminuida{mod_mcp}"
+        p11 = "11. Riesgo del paciente SDNN 20 a 24 hrs ( Riesgo Medio )."
+        d_vfc = "VFC disminuida (Riesgo Medio)."
     elif sdnn < 30:
         p9 = f"9. Variabilidad de la frecuencia cardíaca severamente disminuida ({sdnn} ms){mod_mcp}"
         p11 = "11. Riesgo del paciente SDNN 20 a 24 hrs ( Riesgo Alto )."
@@ -830,7 +823,6 @@ def redactar_informe_holter_11_puntos(d, perfil):
         p11 = "11. Riesgo del paciente SDNN 20 a 24 hrs ( Riesgo Bajo )."
         d_vfc = "VFC conservada."
 
-    # PUNTO 10 (EXACTO)
     if pausas > 0:
         p10 = f"10. Se registraron {pausas} pausas significativas (máx {d.get('pausa_max_seg') or 0.0}s)."
     else:
