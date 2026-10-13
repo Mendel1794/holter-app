@@ -301,9 +301,6 @@ def mostrar_semaforizacion_clinica(modalidad, datos):
         tot_qrs = datos.get("total_latidos", 0)
         ev = datos.get("ev_total", 0)
         carga_ev = (ev / tot_qrs) * 100 if tot_qrs > 0 else 0
-        duplas = datos.get("ev_duplas", 0)
-        tsv = datos.get("tsv_episodios", 0)
-        bloqueo = datos.get("tiene_bloqueo_rama", False)
         mcp = datos.get("mcp_presente", False)
 
         if tv > 0: detalles.append(f"Taquicardia Ventricular documentada ({tv} episodios)")
@@ -315,9 +312,9 @@ def mostrar_semaforizacion_clinica(modalidad, datos):
         if detalles: nivel, titulo = "ROJO", "ALERTA CLÍNICA: HALLAZGOS CRÍTICOS"
         else:
             if mcp: detalles.append(f"Paciente portador de Dispositivo Cardíaco ({datos.get('mcp_porcentaje', 0):.1f}%)")
-            if duplas > 0: detalles.append(f"Ectopia Ventricular Compleja: Duplas presentes ({duplas})")
-            if tsv > 0: detalles.append(f"Taquicardia Supraventricular paroxística ({tsv} rachas)")
-            if bloqueo and not mcp: detalles.append("Trastorno de la conducción intraventricular: Bloqueo de rama")
+            if datos.get("ev_duplas", 0) > 0: detalles.append("Ectopia Ventricular Compleja: Duplas presentes")
+            if datos.get("tsv_episodios", 0) > 0: detalles.append("Taquicardia Supraventricular paroxística")
+            if datos.get("tiene_bloqueo_rama", False) and not mcp: detalles.append("Trastorno de la conducción intraventricular: Bloqueo de rama")
             if sdnn >= 30 and sdnn <= 100 and not mcp: detalles.append(f"Variabilidad de la FC disminuida (SDNN: {sdnn} ms, Riesgo Moderado)")
             if qtc > 460: detalles.append(f"QTc prolongado ({qtc} ms)")
             if detalles: nivel, titulo = "AMARILLO", "PRECAUCIÓN CLÍNICA: DISPOSITIVO O PARÁMETROS LIMÍTROFES"
@@ -394,7 +391,7 @@ def extraer_m1_holter(texto):
     texto_upper = texto.upper()
     txt_flat = re.sub(r'\s+', ' ', texto) # Fusionar líneas para regex de una sola pasada
     
-    m_nom = re.search(r"([A-ZÁÉÍÓÚÑ\s]{3,50},\s*[A-ZÁÉÍÓÚÑ\s]{3,50})[\s\n]+(?:No confirmado|Confirmado)?[\s\n]*Informe", texto)
+    m_nom = re.search(r"([A-ZÁÉÍÓÚÑ\s]{3,50},\s*[A-ZÁÉÍÓÚÑ\s]{3,50})[\s\n]+(?:No confirmado|Confirmado|Reconfirmado)?[\s\n]*Informe", texto)
     d["paciente"] = m_nom.group(1).replace("\n", " ").strip() if m_nom else None
     
     m_id = re.search(r"(?:ID\s*Paciente|ID|C\.?C\.?|Doc\.?|Historia)\s*[:\.]?\s*(\d{5,12})", texto, re.IGNORECASE)
@@ -407,7 +404,6 @@ def extraer_m1_holter(texto):
     d["fc_noc"]  = extraer_numero(r"Noche.*?Prom\.\.?\s*(\d{2,3})", txt_flat, int)
 
     # TABLA DE LATIDOS (Soporta las rayas '|' de Spacelabs)
-    # Ejemplo Spacelabs: Conteo | 62.218 | 61.357 | 1% | 57 | <1% | 0 | 0% | 791 | 1%
     m_conteo = re.search(r"Conteo\s*(?:\|\s*)?([\d\.]+)\s*(?:\|\s*)?([\d\.]+)\s*(?:\|\s*)?(?:<?\d+%)\s*(?:\|\s*)?([\d\.]+)\s*(?:\|\s*)?(?:<?\d+%)\s*(?:\|\s*)?([\d\.]+)\s*(?:\|\s*)?(?:<?\d+%)\s*(?:\|\s*)?([\d\.]+)", txt_flat)
     if m_conteo:
         d["total_latidos"]    = extraer_numero(r"([\d\.]+)", m_conteo.group(1), int)
@@ -418,7 +414,8 @@ def extraer_m1_holter(texto):
         m_pct = re.search(r"Conteo.+?Marcapaso.*?(\d+)%", txt_flat, re.IGNORECASE)
         d["mcp_porcentaje"]   = float(m_pct.group(1)) if m_pct else None
     else:
-        d["total_latidos"] = extraer_numero(r"Total\s+de\s+latidos\s*[:\.]?\s*([\d\.]+)", texto, int)
+        m_tot = re.search(r"Total\s+de\s+latidos\s*[:\.]?\s*([\d\.]+)", texto, re.IGNORECASE) or re.search(r"Total\s+QRS\s*[:\.]?\s*([\d\.]+)", texto, re.IGNORECASE) or re.search(r"Conteo\s+([\d\.]+)\s+[\d\.]+\s+\d+%", texto, re.IGNORECASE)
+        d["total_latidos"] = extraer_numero(r"([\d\.]+)", m_tot.group(1), int) if m_tot else None
         d["ev_total"]      = extraer_numero(r"Latidos ventriculares\s*[:\|]?\s*([\d\.]+)", texto, int)
         d["esv_total"]     = extraer_numero(r"Latidos supraventriculares\s*[:\|]?\s*([\d\.]+)", texto, int)
         d["mcp_latidos"]   = extraer_numero(r"Marcapaso\s*[:\|]?\s*([\d\.]+)", texto, int)
@@ -529,10 +526,25 @@ def ejecutar_extraccion_multimodal(archivos_fotos):
             inline_items.append({"inline_data": {"mime_type": "image/jpeg", "data": b64_img}})
         except Exception: continue
 
-    prompt = """Eres un Cardiólogo especialista en Ergometría. Analiza las fotos y extrae los siguientes parámetros.
-Devuelve ÚNICAMENTE un objeto JSON con estas claves exactas y sus valores:
+    prompt = """Eres un Cardiólogo especialista en Ergometría del Centro Cardiovascular Colombiano CENCARDIO.
+Analiza con máxima rigurosidad las fotografías adjuntas (trazados continuos de esfuerzo y notas manuscritas en post-it).
+Extrae los siguientes parámetros clínicos exactos:
+- Nombre del paciente en mayúsculas
+- Cédula / PID (solo números)
+- Edad (número entero)
+- Sexo ("Femenino" o "Masculino")
+- Protocolo ("Bruce")
+- Etapa alcanzada (ej: "Etapa 6" o "Etapa 4")
+- Tiempo total en minutos como número decimal (ej: si son 16:14 convierte a 16.23; si son 12:30 a 12.5; si son 9:34 a 9.57)
+- Frecuencia Cardíaca Basal en reposo (FC Basal en lpm)
+- Frecuencia Cardíaca Pico en esfuerzo máximo (FC Pico en lpm)
+- Presión Arterial Basal (PAS y PAD basal en mmHg)
+- Presión Arterial Pico de esfuerzo (PAS y PAD pico en mmHg)
+- Desviación del segmento ST (en mm, ej: 0.0)
+
+Devuelve ÚNICAMENTE un objeto JSON:
 {
-  "paciente": "KAROL JULIANA SUAREZ", "cedula": "1050095219", "edad": 17, "sexo": "Femenino",
+  "paciente": "KAROL JULIANA SUAREZ FARFAN", "cedula": "1050095219", "edad": 17, "sexo": "Femenino",
   "protocolo": "Bruce", "etapa": "Etapa 6", "tiempo_min": 16.23, "fc_basal": 91, "fc_pico": 194,
   "pas_basal": 119, "pad_basal": 70, "pas_pico": 140, "pad_pico": 87, "st_mm": 0.0
 }"""
@@ -550,10 +562,10 @@ Devuelve ÚNICAMENTE un objeto JSON con estas claves exactas y sus valores:
 # ==============================================================================
 def arbitrar_valor(k, v1, v2, tipo, default_val, criticidad="alta"):
     """
-    Filtro de Silencio Biológico:
+    Inteligencia de Silencio:
     - 'alta': Si falta el dato (ej. FC prom, Total Latidos), lanza alerta roja.
-    - 'media': Si falta (ej. Ectopias, Pausas), asume 0 y avisa en amarillo.
-    - 'baja': Si el equipo no reporta el dato (ej. FC Día, Eventos Paciente), asume el fallback y GUARDA SILENCIO TOTAL.
+    - 'media': Si falta (ej. Ectopias, Pausas), asume 0 y avisa sutilmente.
+    - 'baja': Si el equipo no reporta el dato (ej. FC Día, Eventos Paciente), asume el fallback y CALLA por completo.
     """
     if v1 is None and v2 is None:
         if criticidad == "baja":
@@ -575,19 +587,19 @@ def auditar_motor_3_universal(m1, m2, modalidad):
     notas = []
 
     if modalidad == "HOLTER":
-        # ALTA CRITICIDAD
+        # Críticos
         for k in ["fc_prom", "total_latidos"]:
             val, msg = arbitrar_valor(k, m1.get(k), m2.get(k) if m2 else None, int, 0, "alta")
             d_f[k] = val; 
             if msg: notas.append(msg)
             
-        # MEDIA CRITICIDAD
+        # Medios
         for k in ["ev_total", "esv_total", "tv_episodios"]:
             val, msg = arbitrar_valor(k, m1.get(k), m2.get(k) if m2 else None, int, 0, "media")
             d_f[k] = val; 
             if msg: notas.append(msg)
 
-        # BAJA CRITICIDAD (SILENCIO ABSOLUTO SI EL EQUIPO NO LOS TRAE)
+        # Bajos (Silenciosos)
         d_f["fc_dia"], _ = arbitrar_valor("fc_dia", m1.get("fc_dia"), m2.get("fc_dia") if m2 else None, int, d_f.get("fc_prom", 0), "baja")
         d_f["fc_noc"], _ = arbitrar_valor("fc_noc", m1.get("fc_noc"), m2.get("fc_noc") if m2 else None, int, d_f.get("fc_prom", 0), "baja")
         d_f["mcp_latidos"], _ = arbitrar_valor("mcp_latidos", m1.get("mcp_latidos"), m2.get("mcp_latidos") if m2 else None, int, 0, "baja")
@@ -621,12 +633,12 @@ def auditar_motor_3_universal(m1, m2, modalidad):
             d_f["pausas"] = 0
 
         # Dispositivos
-        mcp_m1 = m1.get("mcp_presente")
-        mcp_m2 = m2.get("mcp_presente") if m2 else None
-        d_f["mcp_porcentaje"], _ = arbitrar_valor("mcp_porcentaje", m1.get("mcp_porcentaje"), m2.get("mcp_porcentaje") if m2 else None, float, 0.0, "baja")
+        mcp_pct_m1 = m1.get("mcp_porcentaje")
+        mcp_pct_m2 = m2.get("mcp_porcentaje") if m2 else None
+        d_f["mcp_porcentaje"], _ = arbitrar_valor("mcp_porcentaje", mcp_pct_m1, mcp_pct_m2, float, 0.0, "baja")
         
-        # Validar si tiene marcapasos realmente
-        d_f["mcp_presente"] = bool(mcp_m1 or mcp_m2 or d_f["mcp_porcentaje"] > 0 or d_f["mcp_latidos"] > 0)
+        # Validar marcapasos correctamente
+        d_f["mcp_presente"] = bool(m1.get("mcp_presente") or (m2 and m2.get("mcp_presente")) or d_f["mcp_porcentaje"] > 0 or d_f["mcp_latidos"] > 0)
         
         t_bloq = m1.get("tiene_bloqueo_rama", False) or (m2.get("tiene_bloqueo_rama", False) if m2 else False)
         if d_f["mcp_presente"] and d_f["mcp_porcentaje"] >= 50.0:
@@ -702,7 +714,7 @@ def ejecutar_triple_engine_universal(pdf_bytes, modalidad="HOLTER"):
     if modalidad == "HOLTER":
         prompt_ia = f"""Eres Auditor Médico Jefe. Analiza las {total_pags} imágenes y el texto de este Holter 24h.
 Texto: {texto_completo[:15000]}
-Devuelve JSON estricto (Usa 'null' obligatoriamente si el dato NO está explícito. NO inventes 0):
+Devuelve JSON estricto (null si el dato no está explícitamente en el archivo. No asumas ni inventes 0):
 {{"paciente": "str", "cedula": "str", "mcp_presente": bool, "mcp_latidos": int, "mcp_porcentaje": float, "fc_prom": int, "fc_dia": int, "fc_noc": int, "fc_max": int, "fc_min": int, "total_latidos": int, "latidos_normales": int, "pausas": int, "rr_max_seg": float, "ev_total": int, "tv_episodios": int, "ev_duplas": int, "esv_total": int, "tsv_episodios": int, "sdnn_24h": int, "qtc_prom": int, "st_dep_episodios": int, "st_elev_episodios": int, "eventos_paciente": int, "tiene_bloqueo_rama": bool}}"""
     elif modalidad == "MAPA":
         prompt_ia = f"""Eres Auditor Médico Jefe. Analiza las {total_pags} imágenes y el texto de este MAPA.
@@ -717,7 +729,7 @@ Devuelve JSON estricto (null si el dato no está):
 
     ok_m2, m2, mod_ia = consultar_gemini_json(prompt_ia, inline_items=inline_images)
     
-    # Pre-Filtro: Destruir ceros falsos de la IA para que M3 aplique la lógica silenciosa
+    # Destruir ceros falsos de la IA para que M3 aplique la lógica silenciosa
     if ok_m2 and m2 and modalidad == "HOLTER":
         for key_zero in ["fc_dia", "fc_noc", "sdnn_24h", "rr_max_seg"]:
             if m2.get(key_zero) == 0 or m2.get(key_zero) == 0.0: m2[key_zero] = None
@@ -771,7 +783,7 @@ def redactar_informe_holter_11_puntos(d, perfil):
     elif d.get("tiene_bloqueo_rama"): p6 = f"6. Alteración de conducción intraventricular por {d.get('bloqueo_detalle', 'bloqueo de rama')}."
     else: p6 = "6. Sin alteración en la conducción intraventricular."
 
-    tot_q = d.get("total_latidos", 1)
+    tot_q = d.get("total_latidos") or 1
     ev = d.get("ev_total", 0)
     carga = (ev / tot_q) * 100 if tot_q > 0 else 0
     if d.get("tv_episodios", 0) > 0: lown = "Lown Grado IVb (Taquicardia Ventricular)"
@@ -786,7 +798,7 @@ def redactar_informe_holter_11_puntos(d, perfil):
     p7 = f"7. Impulsos alterados por {' y '.join(ect)}." if ect else "7. Sin alteración de impulsos ectópicos."
     p8 = f"8. Diario paciente: {d.get('eventos_paciente', 0)} eventos marcados." if d.get("eventos_paciente", 0) > 0 else "8. No refirió síntomas."
 
-    # Lógica Clínica Exacta de Riesgo Autonómico
+    # Lógica de Riesgo Autonómico del Dr. Amaya
     sdnn = d.get("sdnn_24h")
     if sdnn is None or sdnn == 0:
         p9, p11, d_vfc = "9. Variabilidad de la frecuencia cardíaca no evaluable.", "11. Riesgo autonómico: No valorable.", "VFC no evaluable."
@@ -797,7 +809,9 @@ def redactar_informe_holter_11_puntos(d, perfil):
     else:
         p9, p11, d_vfc = f"9. VFC conservada ({sdnn} ms).", "11. Riesgo autonómico: Bajo/Normal.", "VFC conservada."
 
-    if d.get("mcp_presente"): p9 += " (Modificada por estimulación de marcapasos)."
+    if d.get("mcp_presente"):
+        p9 += " (Modificada por estimulación de marcapasos)."
+
     p10 = f"10. Se registraron {d.get('pausas',0)} pausas significativas (máx {d.get('pausa_max_seg') or 0.0}s)." if d.get("pausas",0) > 0 else ("10. Dispositivo normofuncionante: adecuado sensado y captura." if d.get("mcp_presente") else "10. No hay pausas significativas.")
 
     diag = f"Ritmo sinusal con FC promedio {fc_p} lpm. {d_vfc}"
@@ -1026,6 +1040,94 @@ def generar_pdf_ergometria_completo(d, texto_informe, perfil, cod_uuid, imagenes
     return pdf_bytes, img_preview
 
 # ==============================================================================
+# EXCEL GERENCIAL AVANZADO
+# ==============================================================================
+def generar_excel_avanzado_produccion(df_base):
+    if not OPENPYXL_INSTALADO:
+        csv_str = df_base.to_csv(sep=';', index=False, encoding='utf-8-sig')
+        return csv_str.encode('utf-8-sig'), "csv"
+
+    output = io.BytesIO()
+    wb = openpyxl.Workbook()
+    
+    ws_resumen = wb.active
+    ws_resumen.title = "📊 Tablero Gerencial"
+    ws_resumen.views.sheetView[0].showGridLines = True
+
+    fill_navy = PatternFill(start_color="0A2540", end_color="0A2540", fill_type="solid")
+    fill_light = PatternFill(start_color="F1F5F9", end_color="F1F5F9", fill_type="solid")
+    font_header = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+    font_bold = Font(name="Calibri", size=11, bold=True, color="0A2540")
+    border_thin = Border(left=Side(style='thin', color='CBD5E1'), right=Side(style='thin', color='CBD5E1'), top=Side(style='thin', color='CBD5E1'), bottom=Side(style='thin', color='CBD5E1'))
+
+    ws_resumen["B2"] = "CENTRO CARDIOVASCULAR COLOMBIANO CENCARDIO"
+    ws_resumen["B2"].font = Font(name="Calibri", size=14, bold=True, color="0A2540")
+    ws_resumen["B3"] = f"REPORTE GERENCIAL DE PRODUCCIÓN · EMITIDO: {ahora_colombia().strftime('%d/%m/%Y %H:%M')}"
+    ws_resumen["B3"].font = Font(name="Calibri", size=9, bold=True, color="64748B")
+
+    ws_resumen["B5"] = "PRODUCCIÓN POR MODALIDAD DIAGNÓSTICA"
+    ws_resumen["B5"].font = font_bold
+    headers_mod = ["Modalidad Diagnóstica", "Código CUPS", "Total Estudios", "% Participación"]
+    for col_idx, h in enumerate(headers_mod, start=2):
+        cell = ws_resumen.cell(row=6, column=col_idx, value=h)
+        cell.fill = fill_navy
+        cell.font = font_header
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    prod_mod = df_base.groupby(["modalidad", "cups"]).size().reset_index(name="Cantidad")
+    total_estudios = len(df_base)
+    r_idx = 7
+    for _, fila in prod_mod.iterrows():
+        pct = (fila["Cantidad"] / total_estudios) * 100 if total_estudios > 0 else 0
+        ws_resumen.cell(row=r_idx, column=2, value=fila["modalidad"]).border = border_thin
+        ws_resumen.cell(row=r_idx, column=3, value=fila["cups"]).border = border_thin
+        c_cant = ws_resumen.cell(row=r_idx, column=4, value=fila["Cantidad"])
+        c_cant.border = border_thin
+        c_cant.alignment = Alignment(horizontal="center")
+        c_pct = ws_resumen.cell(row=r_idx, column=5, value=f"{pct:.1f}%")
+        c_pct.border = border_thin
+        c_pct.alignment = Alignment(horizontal="center")
+        r_idx += 1
+
+    ws_resumen.cell(row=r_idx, column=2, value="TOTAL GENERAL").font = font_bold
+    ws_resumen.cell(row=r_idx, column=4, value=total_estudios).font = font_bold
+    ws_resumen.cell(row=r_idx, column=4).alignment = Alignment(horizontal="center")
+    ws_resumen.cell(row=r_idx, column=5, value="100.0%").font = font_bold
+    ws_resumen.cell(row=r_idx, column=5).alignment = Alignment(horizontal="center")
+
+    ws_detalle = wb.create_sheet(title="📁 Detalle RIPS y Facturación")
+    ws_detalle.views.sheetView[0].showGridLines = True
+
+    headers_detalle = ["N° ID", "Fecha Registro", "Paciente", "Modalidad", "CUPS", "Métrica Clave", "Especialista Lector", "Código Forense"]
+    for col_num, h in enumerate(headers_detalle, 1):
+        cell = ws_detalle.cell(row=1, column=col_num, value=h)
+        cell.fill = fill_navy
+        cell.font = font_header
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        ws_detalle.row_dimensions[1].height = 26
+
+    columnas_ordenadas = ["id", "fecha_registro", "paciente", "modalidad", "cups", "parametro_clave", "medico", "codigo_verificacion"]
+    df_exp = df_base[columnas_ordenadas].copy()
+
+    for r_idx_d, fila in enumerate(df_exp.itertuples(index=False), start=2):
+        ws_detalle.row_dimensions[r_idx_d].height = 20
+        fill_row = fill_light if (r_idx_d % 2 == 0) else None
+        for c_idx, valor in enumerate(fila, start=1):
+            cell = ws_detalle.cell(row=r_idx_d, column=c_idx, value=str(valor))
+            cell.border = border_thin
+            if fill_row: cell.fill = fill_row
+            if c_idx in [1, 5]: cell.alignment = Alignment(horizontal="center")
+
+    for ws in [ws_resumen, ws_detalle]:
+        for col in ws.columns:
+            max_len = max(len(str(cell.value or '')) for cell in col)
+            col_letter = get_column_letter(col[0].column)
+            ws.column_dimensions[col_letter].width = max(max_len + 3, 12)
+
+    wb.save(output)
+    return output.getvalue(), "xlsx"
+
+# ==============================================================================
 # UI PRINCIPAL Y LOGIN
 # ==============================================================================
 LISTA_ESPECIALISTAS = [
@@ -1092,7 +1194,7 @@ st.markdown(f'<div class="top-hospital-bar"><div><div style="font-size:1.35rem; 
 tab_procesar, tab_historial = st.tabs(["📥 Procesamiento del Estudio", "📁 Archivo Clínico & Reportes"])
 
 # ==============================================================================
-# PESTAÑA 1: PROCESAMIENTO (HOLTER, MAPA Y ESFUERZO INTEGRADOS)
+# PESTAÑA 1: PROCESAMIENTO (HOLTER, MAPA Y ESFUERZO)
 # ==============================================================================
 with tab_procesar:
     if "Esfuerzo" in mod_sel:
@@ -1174,7 +1276,7 @@ with tab_procesar:
                 b1.download_button("📄 DESCARGAR PDF", data=pdf_erg, file_name=f"{normalizar_nombre_archivo(p_nombre)}_Esfuerzo.pdf", mime="application/pdf", type="primary", use_container_width=True)
                 if b2.button("💾 Guardar Clínico", use_container_width=True):
                     guardar_estudio_servicio(p_nombre, "Prueba de Esfuerzo", "CUPS 893805", f"FC Pico: {p_fc_pico} | {p_mets} METs", perfil_activo['nombre_completo'], txt_erg_final, pdf_erg, uid)
-                    st.success("✅ Guardado en Archivo Clínico.")
+                    st.success("✅ Guardado.")
                 
                 if p_celular:
                     tel_l = re.sub(r'\D', '', p_celular)
