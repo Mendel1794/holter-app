@@ -24,6 +24,7 @@ TZ_COLOMBIA = timezone(timedelta(hours=-5))
 def ahora_colombia():
     return datetime.now(TZ_COLOMBIA)
 
+# Importación segura de openpyxl (Excel Avanzado)
 try:
     import openpyxl
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -32,6 +33,7 @@ try:
 except ImportError:
     OPENPYXL_INSTALADO = False
 
+# Importación segura de Supabase (Nube)
 try:
     from supabase import create_client, Client
     SUPABASE_LIB_OK = True
@@ -205,7 +207,8 @@ def sincronizar_directorio_servicio(df):
     col_nom = next((col for col in df.columns if any(k in col.lower() for k in ["nombre", "paciente", "usuario"])), None)
 
     if not col_ced or not col_tel: return False, "El archivo debe contener columnas de Cédula y Teléfono/Celular."
-    registros, fecha_hoy = 0, ahora_colombia().strftime("%Y-%m-%d %H:%M")
+    registros = 0
+    fecha_hoy = ahora_colombia().strftime("%Y-%m-%d %H:%M")
     lote = []
     for _, fila in df.iterrows():
         ced = re.sub(r'\D', '', str(fila[col_ced]))
@@ -263,13 +266,13 @@ def ejecutar_sanity_checks(modalidad, datos):
         pas = datos.get("pas_24h", 0)
         pad = datos.get("pad_24h", 0)
         cn = datos.get("caida_nocturna_val", 0.0)
-        if pas > 0 and pad >= pas: bloqueos.append(f"Error Hemodinámico: Diastólica ({pad}) >= Sistólica ({pas}).")
+        if pas > 0 and pad >= pas: bloqueos.append(f"Error Hemodinámico Severo: Diastólica ({pad}) >= Sistólica ({pas}).")
         if pas > 0 and (pas - pad) < 20: alertas.append(f"Presión de Pulso estrecha ({pas - pad} mmHg).")
         if cn < -20.0: alertas.append(f"Patrón Riser Extremo (Aumento nocturno: {cn:.1f}%). Riesgo inminente.")
     elif modalidad == "ESFUERZO":
         pas_pico = datos.get("pas_pico", 150)
         pad_pico = datos.get("pad_pico", 90)
-        if pad_pico >= pas_pico: bloqueos.append(f"Incongruencia Esfuerzo: PAD ({pad_pico}) >= PAS ({pas_pico}).")
+        if pad_pico >= pas_pico: bloqueos.append(f"Incongruencia Esfuerzo: PAD pico ({pad_pico}) >= PAS pico ({pas_pico}).")
     return bloqueos, alertas
 
 def auditar_coherencia_informe(texto_informe, datos, modalidad):
@@ -302,7 +305,7 @@ def mostrar_semaforizacion_clinica(modalidad, datos):
         mcp = datos.get("mcp_presente", False)
 
         if tv > 0: detalles.append(f"Taquicardia Ventricular documentada ({tv} episodios)")
-        if sdnn > 0 and sdnn <= 60 and not mcp: detalles.append(f"Variabilidad Autonómica Severamente Disminuida (SDNN: {sdnn} ms, Riesgo Alto)")
+        if sdnn > 0 and sdnn <= 30 and not mcp: detalles.append(f"Variabilidad Autonómica Severamente Disminuida (SDNN: {sdnn} ms, Riesgo Alto)")
         if pausas > 0: detalles.append(f"Pausas patológicas registradas ({pausas} pausas)")
         if qtc > 500: detalles.append(f"Intervalo QTc Severamente Prolongado ({qtc} ms, riesgo proarrítmico)")
         if carga_ev >= 10.0: detalles.append(f"Carga Ectópica Ventricular Crítica ({carga_ev:.1f}%)")
@@ -313,7 +316,7 @@ def mostrar_semaforizacion_clinica(modalidad, datos):
             if datos.get("ev_duplas", 0) > 0: detalles.append("Ectopia Ventricular Compleja: Duplas presentes")
             if datos.get("tsv_episodios", 0) > 0: detalles.append("Taquicardia Supraventricular paroxística")
             if datos.get("tiene_bloqueo_rama", False) and not mcp: detalles.append("Trastorno de la conducción intraventricular: Bloqueo de rama")
-            if sdnn > 0 and sdnn <= 120 and not mcp: detalles.append(f"Variabilidad de la FC disminuida (SDNN: {sdnn} ms, Riesgo Moderado)")
+            if sdnn > 30 and sdnn <= 100 and not mcp: detalles.append(f"Variabilidad de la FC disminuida (SDNN: {sdnn} ms, Riesgo Moderado)")
             if qtc > 460: detalles.append(f"QTc prolongado ({qtc} ms)")
             if detalles: nivel, titulo = "AMARILLO", "PRECAUCIÓN CLÍNICA: DISPOSITIVO CARDÍACO O PARÁMETROS LIMÍTROFES"
             else: detalles.append("Ritmo sinusal conservado, modulación autonómica normal y sin arritmias complejas.")
@@ -347,8 +350,8 @@ def mostrar_semaforizacion_clinica(modalidad, datos):
     st.markdown(f'<div class="{clase_css}"><div style="font-weight: 800; font-size: 0.95rem; display: flex; align-items: center; gap: 8px;"><span>{icono}</span> {titulo}</div><ul style="margin: 0.4rem 0 0 1.2rem; font-size: 0.85rem; padding-left: 0;">{items_html}</ul></div>', unsafe_allow_html=True)
 
 def generar_grafica_tacograma(d):
-    fc_prom = d.get("fc_prom", 0)
-    if not fc_prom or fc_prom <= 0:
+    fc_prom = d.get("fc_prom") or 0
+    if fc_prom == 0:
         fig = go.Figure()
         fig.update_layout(title="Tacograma no disponible (Dato FC ausente)", height=240, margin=dict(l=35, r=20, t=35, b=25))
         return fig
@@ -373,7 +376,7 @@ def generar_grafica_tacograma(d):
     return fig
 
 # ==============================================================================
-# MOTOR 1: EXTRACTOR DETERMINÍSTICO C++ (MANTIENE LA ESTRUCTURA ESPACIAL)
+# MOTOR 1: EXTRACTOR DETERMINÍSTICO C++ (SIN APLASTAMIENTO DE TABLAS)
 # ==============================================================================
 def limpiar_numero(val_str, tipo=int):
     if not val_str: return None
@@ -387,6 +390,7 @@ def limpiar_numero(val_str, tipo=int):
 def extraer_m1_holter(texto):
     d = {}
     texto_upper = texto.upper()
+    txt_flat = re.sub(r'\s+', ' ', texto) # Flat solo para regex de líneas simples
     
     m_nom = re.search(r"([A-ZÁÉÍÓÚÑ\s]{3,50},\s*[A-ZÁÉÍÓÚÑ\s]{3,50})[\s\n]+(?:No confirmado|Confirmado|Reconfirmado)?[\s\n]*Informe", texto)
     d["paciente"] = m_nom.group(1).replace("\n", " ").strip() if m_nom else None
@@ -394,61 +398,68 @@ def extraer_m1_holter(texto):
     m_id = re.search(r"(?:ID\s*Paciente|ID|C\.?C\.?|Doc\.?|Historia)\s*[:\.]?\s*(\d{5,12})", texto, re.IGNORECASE)
     d["cedula"] = m_id.group(1) if m_id else None
 
-    # Búsquedas precisas, sin valores por defecto
-    fc_p = re.search(r"Prom\.?\s*(\d{2,3})", texto)
-    d["fc_prom"] = int(fc_p.group(1)) if fc_p else None
-    fc_max = re.search(r"M[áa]x\s*(\d{2,3})", texto)
-    d["fc_max"] = int(fc_max.group(1)) if fc_max else None
-    fc_min = re.search(r"M[íi]n\s*(\d{2,3})", texto)
-    d["fc_min"] = int(fc_min.group(1)) if fc_min else None
+    # Frecuencias base
+    m_prom = re.search(r"Prom\.?\s*(\d{2,3})", texto)
+    d["fc_prom"] = int(m_prom.group(1)) if m_prom else None
+    m_max = re.search(r"M[áa]x\s*(\d{2,3})", texto)
+    d["fc_max"] = int(m_max.group(1)) if m_max else None
+    m_min = re.search(r"M[íi]n\s*(\d{2,3})", texto)
+    d["fc_min"] = int(m_min.group(1)) if m_min else None
     
-    # DOTALL para saltos de línea en Día/Noche
-    fc_dia = re.search(r"D[íi]a.*?Prom\.\.?\s*(\d{2,3})", texto, re.DOTALL)
-    d["fc_dia"] = int(fc_dia.group(1)) if fc_dia else None
-    fc_noc = re.search(r"Noche.*?Prom\.\.?\s*(\d{2,3})", texto, re.DOTALL)
-    d["fc_noc"] = int(fc_noc.group(1)) if fc_noc else None
+    m_dia = re.search(r"D[íi]a.*?Prom\.\.?\s*(\d{2,3})", txt_flat)
+    d["fc_dia"] = int(m_dia.group(1)) if m_dia else None
+    m_noc = re.search(r"Noche.*?Prom\.\.?\s*(\d{2,3})", txt_flat)
+    d["fc_noc"] = int(m_noc.group(1)) if m_noc else None
 
-    # Extraer Tabla de Latidos (Multilínea)
-    m_conteo = re.search(r"Latidos[^\n\r]*\n[^\n\r]*Conteo\s+([\d\.]+)\s+([\d\.]+)\s+\d+%\s+([\d\.]+)[^\n\r]*\s+([\d\.]+)[^\n\r]*\s+([\d\.]+)\s+(\d+)?%", texto, re.IGNORECASE)
-    if m_conteo:
-        d["total_latidos"]    = limpiar_numero(m_conteo.group(1))
-        d["latidos_normales"] = limpiar_numero(m_conteo.group(2))
-        d["ev_total"]         = limpiar_numero(m_conteo.group(3))
-        d["esv_total"]        = limpiar_numero(m_conteo.group(4))
-        d["mcp_latidos"]      = limpiar_numero(m_conteo.group(5))
-        d["mcp_porcentaje"]   = float(m_conteo.group(6)) if m_conteo.group(6) else None
+    # Extracción de Tablas Complejas (Spacelabs)
+    # Busca la estructura: Conteo 62.218 791 1% 57 <1% 0 0% 61.357 99%
+    sp_m = re.search(r"Conteo\s+([\d\.]+)\s+([\d\.]+)\s+<?\d+%\s+([\d\.]+)\s+<?\d+%\s+([\d\.]+)\s+<?\d+%\s+([\d\.]+)\s+<?(\d+)%", txt_flat)
+    if sp_m:
+        d["total_latidos"]    = limpiar_numero(sp_m.group(1))
+        d["latidos_normales"] = limpiar_numero(sp_m.group(2))
+        d["ev_total"]         = limpiar_numero(sp_m.group(3))
+        d["esv_total"]        = limpiar_numero(sp_m.group(4))
+        d["mcp_latidos"]      = limpiar_numero(sp_m.group(5))
+        d["mcp_porcentaje"]   = float(sp_m.group(6))
     else:
-        # Fallback si el formato de tabla cambia
         m_tot = re.search(r"Total\s+de\s+latidos\s*[:\.]?\s*([\d\.]+)", texto, re.IGNORECASE) or re.search(r"Total\s+QRS\s*[:\.]?\s*([\d\.]+)", texto, re.IGNORECASE) or re.search(r"Conteo\s+([\d\.]+)\s+[\d\.]+\s+\d+%", texto, re.IGNORECASE)
         d["total_latidos"] = limpiar_numero(m_tot.group(1)) if m_tot else None
         m_ev = re.search(r"Latidos ventriculares\s*:\s*([\d\.]+)", texto) or re.search(r"Latidos\s+V\b[^\n\r\d]*([\d\.]+)", texto, re.IGNORECASE)
         d["ev_total"] = limpiar_numero(m_ev.group(1)) if m_ev else None
         m_esv = re.search(r"Latidos supraventriculares\s*:\s*([\d\.]+)", texto)
         d["esv_total"] = limpiar_numero(m_esv.group(1)) if m_esv else None
-        m_mcp = re.search(r"Marcapaso\s+([\d\.]+)\s+(\d+)%", texto, re.IGNORECASE)
+        m_mcp = re.search(r"Marcapaso\s+([\d\.]+)", texto, re.IGNORECASE)
         d["mcp_latidos"] = limpiar_numero(m_mcp.group(1)) if m_mcp else None
-        d["mcp_porcentaje"] = float(m_mcp.group(2)) if (m_mcp and m_mcp.group(2)) else None
+        m_mcp_pct = re.search(r"Marcapaso.*?([\d\.]+)\s*%", txt_flat, re.IGNORECASE)
+        d["mcp_porcentaje"] = float(m_mcp_pct.group(1)) if m_mcp_pct else None
         d["latidos_normales"] = None
 
-    d["mcp_presente"] = True if (d.get("mcp_latidos") and d["mcp_latidos"] > 0) else (None if "MARCAPASOS" not in texto_upper else True)
+    d["mcp_presente"] = True if ((d.get("mcp_latidos") and d["mcp_latidos"] > 0) or re.search(r'\b(MARCAPASO|MARCAPASOS|MCP|ESTIMULADO)\b', texto_upper)) else False
 
-    m_rrmax = re.search(r"Intervalo\s+RR.*?M[áa]x\.\s*longitud\s*([\d,\.]+)\s*s", texto, re.IGNORECASE | re.DOTALL)
-    d["rr_max_seg"] = float(m_rrmax.group(1).replace(",", ".")) if m_rrmax else None
+    m_rr = re.search(r"Intervalo\s+RR.*?M[áa]x\.\s*longitud\s*([\d,\.]+)\s*s", txt_flat, re.IGNORECASE)
+    d["rr_max_seg"] = float(m_rr.group(1).replace(",", ".")) if m_rr else None
 
-    pausa_m = re.search(r"\bPausa\s+(\d+)", texto)
-    d["pausas"] = int(pausa_m.group(1)) if pausa_m else None
+    m_pausa = re.search(r"\bPausa\s+(\d+)", texto)
+    d["pausas"] = int(m_pausa.group(1)) if m_pausa else None
     
-    tv_m = re.search(r"\bTV\s+([\d\.]+)", texto)
-    d["tv_episodios"] = limpiar_numero(tv_m.group(1)) if tv_m else None
-    dup_m = re.search(r"Apareado\s+([\d\.]+)", texto)
-    d["ev_duplas"] = limpiar_numero(dup_m.group(1)) if dup_m else None
-    tsv_m = re.search(r"\bTSV\s+([\d\.]+)", texto)
-    d["tsv_episodios"] = limpiar_numero(tsv_m.group(1)) if tsv_m else None
+    m_tv = re.search(r"\bTV\s+([\d\.]+)", texto)
+    d["tv_episodios"] = limpiar_numero(m_tv.group(1)) if m_tv else None
+    m_dup = re.search(r"Apareado\s+([\d\.]+)", texto)
+    d["ev_duplas"] = limpiar_numero(m_dup.group(1)) if m_dup else None
+    m_tsv = re.search(r"\bTSV\s+([\d\.]+)", texto)
+    d["tsv_episodios"] = limpiar_numero(m_tsv.group(1)) if m_tsv else None
     
-    sdnn_m = re.search(r"Valor de 24 horas\s+[\d\.,]+\s+([\d\.,]+)", texto)
-    d["sdnn_24h"] = limpiar_numero(sdnn_m.group(1)) if sdnn_m else None
-    qtc_m = re.search(r"Todos los per[íi]odos\s+[\d\.,]+\s+[\d\.,]+\s+([\d\.,]+)", texto)
-    d["qtc_prom"] = limpiar_numero(qtc_m.group(1)) if qtc_m else None
+    # SDNN: Busca TODOS los valores en el PDF y toma el máximo real (Evita los ceros falsos de las páginas de resumen)
+    sdnns = re.findall(r"Valor de 24 horas\s+[\d\.,]+\s+([\d\.,]+)", texto)
+    if not sdnns: sdnns = re.findall(r"Valor de 24 horas\s+[\d\.,]+\s+([\d\.,]+)", txt_flat)
+    sdnn_list = [int(x) for x in sdnns if x.isdigit() and int(x) > 0]
+    d["sdnn_24h"] = max(sdnn_list) if sdnn_list else None
+    
+    # QTc Promedio: Escanea todos los valores y toma el mayor
+    qtcs = re.findall(r"Todos los per[íi]odos\s+[\d\.,]+\s+[\d\.,]+\s+([\d\.,]+)", texto)
+    if not qtcs: qtcs = re.findall(r"Todos los per[íi]odos\s+[\d\.,]+\s+[\d\.,]+\s+([\d\.,]+)", txt_flat)
+    qtc_list = [int(x) for x in qtcs if x.isdigit() and int(x) > 0]
+    d["qtc_prom"] = max(qtc_list) if qtc_list else None
     
     st_dep = re.search(r"Depresi[óo]n ST\s+(\d+)", texto)
     d["st_dep_episodios"] = int(st_dep.group(1)) if st_dep else None
@@ -461,29 +472,44 @@ def extraer_m1_holter(texto):
 
 def extraer_m1_mapa(texto):
     d = {}
+    txt_flat = re.sub(r'\s+', ' ', texto)
     m_nom = re.search(r"Nombre del paciente:\s*([^\n\r\|]+)", texto, re.IGNORECASE)
     d["paciente"] = m_nom.group(1).replace("\n", " ").strip() if m_nom else None
     
-    p_gen = re.search(r"Resumen general.*?Prom\.?:\s*(\d{2,3})\s*[\/\-]\s*(\d{2,3})\s*mmHg", texto, re.IGNORECASE | re.DOTALL)
-    d["pas_24h"] = int(p_gen.group(1)) if p_gen else None
-    d["pad_24h"] = int(p_gen.group(2)) if p_gen else None
+    p_gen = re.search(r"Resumen general.*?Prom\.?:\s*(\d{2,3})\s*[\/\-]\s*(\d{2,3})\s*mmHg", txt_flat, re.IGNORECASE)
+    if p_gen:
+        d["pas_24h"] = int(p_gen.group(1))
+        d["pad_24h"] = int(p_gen.group(2))
     
-    c_sis = re.search(r"Sist[óo]lico\s*>\s*l[íi]mite\s*:\s*([\d,\.]+)\s*%", texto, re.IGNORECASE)
+    c_sis = re.search(r"Sist[óo]lico\s*>\s*l[íi]mite\s*:\s*([\d,\.]+)\s*%", txt_flat, re.IGNORECASE)
     d["carga_pas"] = float(c_sis.group(1).replace(",", ".")) if c_sis else None
-    c_dia = re.search(r"Diast[óo]lico\s*>\s*l[íi]mite\s*:\s*([\d,\.]+)\s*%", texto, re.IGNORECASE)
+    c_dia = re.search(r"Diast[óo]lico\s*>\s*l[íi]mite\s*:\s*([\d,\.]+)\s*%", txt_flat, re.IGNORECASE)
     d["carga_pad"] = float(c_dia.group(1).replace(",", ".")) if c_dia else None
     
-    pp_m = re.search(r"Presi[óo]n de pulso\s*\(mmHg\)\s*\n?\s*(\d{2,3})", texto, re.IGNORECASE)
+    pp_m = re.search(r"Presi[óo]n de pulso\s*\(mmHg\)\s*(\d{2,3})", txt_flat, re.IGNORECASE)
     d["pp_val"] = int(pp_m.group(1)) if pp_m else None
     
-    caida_m = re.search(r"Sist[óo]lico\s*\(mmHg\)\s*.*?([\d,\.\-]+)\s*%", texto, re.DOTALL)
+    caida_m = re.search(r"Sist[óo]lico\s*\(mmHg\)\s*.*?([\d,\.\-]+)\s*%", txt_flat, re.DOTALL)
     d["caida_nocturna_val"] = float(caida_m.group(1).replace(",", ".")) if caida_m else None
     return d
 
 def extraer_m1_esfuerzo(texto):
     d = {}
-    m_p = re.search(r"FC Pico\s*[:\-]\s*(\d{2,3})", texto, re.IGNORECASE)
-    d["fc_pico"] = int(m_p.group(1)) if m_p else None
+    txt_flat = re.sub(r'\s+', ' ', texto)
+    m_fcb = re.search(r"FC\s*(?:en)?\s*reposo\s*[:\-]?\s*(\d{2,3})", txt_flat, re.IGNORECASE)
+    d["fc_basal"] = int(m_fcb.group(1)) if m_fcb else None
+    m_fcp = re.search(r"FC\s*(?:M[áa]x|Pico)\s*[:\-]?\s*(\d{2,3})", txt_flat, re.IGNORECASE)
+    d["fc_pico"] = int(m_fcp.group(1)) if m_fcp else None
+    m_pas = re.search(r"PA\s*M[áa]x\s*[:\-]?\s*(\d{2,3})\s*/", txt_flat, re.IGNORECASE)
+    d["pas_pico"] = int(m_pas.group(1)) if m_pas else None
+    m_pad = re.search(r"PA\s*M[áa]x\s*[:\-]?\s*\d{2,3}\s*/\s*(\d{2,3})", txt_flat, re.IGNORECASE)
+    d["pad_pico"] = int(m_pad.group(1)) if m_pad else None
+    m_tm = re.search(r"Tiempo\s*(?:total)?\s*[:\-]?\s*([\d,\.]+)", txt_flat, re.IGNORECASE)
+    d["tiempo_min"] = float(m_tm.group(1).replace(",",".")) if m_tm else None
+    m_mt = re.search(r"METS\s*[:\-]?\s*([\d,\.]+)", txt_flat, re.IGNORECASE)
+    d["mets"] = float(m_mt.group(1).replace(",",".")) if m_mt else None
+    m_st = re.search(r"ST\s*[:\-]?\s*([\d,\.]+)", txt_flat, re.IGNORECASE)
+    d["st_mm"] = float(m_st.group(1).replace(",",".")) if m_st else None
     return d
 
 # ==============================================================================
@@ -561,19 +587,22 @@ Devuelve ÚNICAMENTE un objeto JSON:
     return False, "No se pudo completar el análisis."
 
 # ==============================================================================
-# MOTOR 3: NÚCLEO DE ARBITRAJE MATEMÁTICO UNIVERSAL (CON SILENCIO INTELIGENTE)
+# MOTOR 3: NÚCLEO DE ARBITRAJE MATEMÁTICO UNIVERSAL (CON INTELIGENCIA SILENCIOSA)
 # ==============================================================================
 def arbitrar_valor(k, v1, v2, tipo, default_val, criticidad="alta"):
     """
     Inteligencia de Silencio:
-    - 'alta': Si falta el dato, lanza alerta roja (ej. total de latidos).
-    - 'media': Si falta, asume 0 o default, y avisa sutilmente.
-    - 'baja': Si falta (ej. el equipo no reporta FC Día o Pausas), asume el default y calla por completo.
+    - 'alta': Si falta el dato (ej. FC prom, Total Latidos), lanza alerta roja.
+    - 'media': Si falta (ej. Ectopias, Pausas), asume 0 y avisa sutilmente.
+    - 'baja': Si falta (ej. el equipo no reporta FC Día o Eventos Paciente), asume el default y CALLA por completo.
     """
     if v1 is None and v2 is None:
-        if criticidad == "alta": return default_val, f"🚨 CRÍTICO: Ningún motor encontró '{k}'. Revise archivo."
-        elif criticidad == "media": return default_val, f"⚠️ AVISO: No se detectó '{k}'. Se asume {default_val}."
-        else: return default_val, None # Silencio total
+        if criticidad == "baja":
+            return default_val, None
+        elif criticidad == "media":
+            return default_val, f"⚠️ AVISO: No se detectó '{k}'. Se asume {default_val}."
+        else:
+            return default_val, f"🚨 CRÍTICO: Ningún motor encontró '{k}'. Verifique archivo."
 
     if v1 is not None and v2 is not None:
         if v1 == v2: return v1, None
@@ -587,21 +616,21 @@ def auditar_motor_3_universal(m1, m2, modalidad):
     notas = []
 
     if modalidad == "HOLTER":
-        # Críticos
+        # ALTA CRITICIDAD
         for k in ["fc_prom", "total_latidos"]:
             val, msg = arbitrar_valor(k, m1.get(k), m2.get(k) if m2 else None, int, 0, "alta")
             d_f[k] = val; 
             if msg: notas.append(msg)
             
-        # Medios
+        # MEDIA CRITICIDAD
         for k in ["ev_total", "esv_total", "tv_episodios"]:
             val, msg = arbitrar_valor(k, m1.get(k), m2.get(k) if m2 else None, int, 0, "media")
             d_f[k] = val; 
             if msg: notas.append(msg)
 
-        # Bajos (Silenciosos)
-        d_f["fc_dia"], _ = arbitrar_valor("fc_dia", m1.get("fc_dia"), m2.get("fc_dia") if m2 else None, int, d_f.get("fc_prom", 0), "baja")
-        d_f["fc_noc"], _ = arbitrar_valor("fc_noc", m1.get("fc_noc"), m2.get("fc_noc") if m2 else None, int, d_f.get("fc_prom", 0), "baja")
+        # BAJA CRITICIDAD (SILENCIO ABSOLUTO SI EL EQUIPO NO LOS TRAE)
+        d_f["fc_dia"], _ = arbitrar_valor("fc_dia", m1.get("fc_dia"), m2.get("fc_dia") if m2 else None, int, None, "baja")
+        d_f["fc_noc"], _ = arbitrar_valor("fc_noc", m1.get("fc_noc"), m2.get("fc_noc") if m2 else None, int, None, "baja")
         d_f["mcp_latidos"], _ = arbitrar_valor("mcp_latidos", m1.get("mcp_latidos"), m2.get("mcp_latidos") if m2 else None, int, 0, "baja")
         d_f["eventos_paciente"], _ = arbitrar_valor("eventos_paciente", m1.get("eventos_paciente"), m2.get("eventos_paciente") if m2 else None, int, 0, "baja")
         d_f["rr_max_seg"], _ = arbitrar_valor("rr_max_seg", m1.get("rr_max_seg"), m2.get("rr_max_seg") if m2 else None, float, 0.0, "baja")
@@ -614,7 +643,7 @@ def auditar_motor_3_universal(m1, m2, modalidad):
         d_f["paciente"] = m2.get("paciente") if (m2 and m2.get("paciente")) else m1.get("paciente", "PACIENTE ANÓNIMO")
         d_f["cedula"] = m2.get("cedula") if (m2 and m2.get("cedula")) else m1.get("cedula", "")
 
-        # LEY DE CONSERVACIÓN QRS
+        # Candado LEY DE CONSERVACIÓN QRS
         norm_m1 = m1.get("latidos_normales")
         norm_m2 = m2.get("latidos_normales") if m2 else None
         norm, _ = arbitrar_valor("latidos_normales", norm_m1, norm_m2, int, 0, "baja")
@@ -627,7 +656,7 @@ def auditar_motor_3_universal(m1, m2, modalidad):
         else:
             d_f["latidos_normales"] = norm if norm > 0 else max(0, d_f["total_latidos"] - d_f["ev_total"] - d_f["esv_total"] - d_f["mcp_latidos"])
 
-        # CANDADO PAUSAS vs RR MÁXIMO
+        # Candado PAUSAS vs RR MÁXIMO
         if d_f["rr_max_seg"] > 0 and d_f["rr_max_seg"] < 2.0 and d_f["pausas"] > 0:
             notas.append(f"🔒 VETO FISIOLÓGICO: RR Máx es {d_f['rr_max_seg']}s. Imposible pausas > 2.0s. Se vetan pausas.")
             d_f["pausas"] = 0
@@ -712,7 +741,7 @@ def ejecutar_triple_engine_universal(pdf_bytes, modalidad="HOLTER"):
     if modalidad == "HOLTER":
         prompt_ia = f"""Eres Auditor Médico Jefe. Analiza las {total_pags} imágenes y el texto de este Holter 24h.
 Texto: {texto_completo[:15000]}
-Devuelve JSON estricto (null si el dato no está explícitamente en el archivo. No inventes 0 si no hay dato):
+Devuelve JSON estricto (Usa 'null' obligatoriamente si el dato NO está escrito de forma explícita en el archivo. No asumas ni inventes 0 si no hay dato):
 {{"paciente": "str", "cedula": "str", "mcp_presente": bool, "mcp_latidos": int, "mcp_porcentaje": float, "fc_prom": int, "fc_dia": int, "fc_noc": int, "fc_max": int, "fc_min": int, "total_latidos": int, "latidos_normales": int, "pausas": int, "rr_max_seg": float, "ev_total": int, "tv_episodios": int, "ev_duplas": int, "esv_total": int, "tsv_episodios": int, "sdnn_24h": int, "qtc_prom": int, "st_dep_episodios": int, "st_elev_episodios": int, "eventos_paciente": int, "tiene_bloqueo_rama": bool}}"""
     elif modalidad == "MAPA":
         prompt_ia = f"""Eres Auditor Médico Jefe. Analiza las {total_pags} imágenes y el texto de este MAPA.
@@ -727,6 +756,11 @@ Devuelve JSON estricto (null si el dato no está):
 
     ok_m2, m2, mod_ia = consultar_gemini_json(prompt_ia, inline_items=inline_images)
     
+    # Destruir ceros falsos de la IA para que M3 aplique la lógica silenciosa correctamente
+    if ok_m2 and m2:
+        for key_zero in ["fc_dia", "fc_noc", "sdnn_24h"]:
+            if m2.get(key_zero) == 0: m2[key_zero] = None
+
     # M3: Quórum Final
     d_final, notas = auditar_motor_3_universal(m1, m2 if ok_m2 else None, modalidad)
     d_final["triple_engine_activo"] = True
@@ -736,23 +770,32 @@ Devuelve JSON estricto (null si el dato no está):
     return d_final
 
 # ==============================================================================
-# REDACTORES INSTITUCIONALES 
+# REDACTORES INSTITUCIONALES (INTELIGENTES A LOS VACÍOS)
 # ==============================================================================
 def redactar_informe_holter_11_puntos(d, perfil):
     fc_p = d.get("fc_prom", 0)
-    fc_d = d.get("fc_dia", fc_p)
-    fc_n = d.get("fc_noc", fc_p)
-    desc_crono = ((fc_d - fc_n) / fc_d * 100) if fc_d > 0 else 0
-    dip_txt = f"conservado ({desc_crono:.1f}% descenso)" if desc_crono >= 10 else f"atenuado ({desc_crono:.1f}% descenso)"
+    fc_d = d.get("fc_dia")
+    fc_n = d.get("fc_noc")
+    
+    # Lógica de silencio para Día/Noche si el equipo no los reportó
+    dip_txt = ""
+    if fc_d and fc_n and fc_d != fc_p and fc_n != fc_p:
+        desc_crono = ((fc_d - fc_n) / fc_d * 100) if fc_d > 0 else 0
+        patron = "conservado" if desc_crono >= 10 else "atenuado"
+        dip_txt = f" (Día: {fc_d} / Noche: {fc_n}; patrón circadiano {patron} con {desc_crono:.1f}% de descenso)"
 
-    pct_mcp = d.get("mcp_porcentaje", 0.0)
-    if d.get("mcp_presente") and pct_mcp >= 80.0: p1 = f"1. Ritmo comandado por marcapasos definitivo (electroestimulado/sensado en {pct_mcp:.1f}%) con FC promedio {fc_p} lpm (Día: {fc_d} / Noche: {fc_n})."
-    elif d.get("mcp_presente"): p1 = f"1. Ritmo sinusal alternando con electroestimulación ({pct_mcp:.1f}% mediado por MCP) con FC promedio {fc_p} lpm (Día: {fc_d} / Noche: {fc_n})."
-    else: p1 = f"1. Ritmo sinusal con FC promedio {fc_p} lpm (Día: {fc_d} / Noche: {fc_n}; patrón circadiano {dip_txt})."
+    pct_mcp = d.get("mcp_porcentaje") or 0.0
+    if d.get("mcp_presente") and pct_mcp >= 80.0: 
+        p1 = f"1. Ritmo comandado por marcapasos definitivo (electroestimulado/sensado en {pct_mcp:.1f}%) con FC promedio {fc_p} lpm{dip_txt}."
+    elif d.get("mcp_presente"): 
+        pct_str = f" ({pct_mcp:.1f}% mediado por MCP)" if pct_mcp > 0 else " con presencia de MCP"
+        p1 = f"1. Ritmo sinusal alternando con electroestimulación{pct_str} con FC promedio {fc_p} lpm{dip_txt}."
+    else: 
+        p1 = f"1. Ritmo sinusal con FC promedio {fc_p} lpm{dip_txt}."
 
     crono = []
-    if d.get("taqui_conteo", 0) > 0: crono.append(f"{d.get('taqui_conteo')} episodios de taquicardia (FC máx {d.get('taqui_fc_max', d.get('fc_max',0))} lpm)")
-    if d.get("bradi_conteo", 0) > 0: crono.append(f"{d.get('bradi_conteo')} episodios de bradicardia (FC mín {d.get('bradi_fc_min', d.get('fc_min',0))} lpm)")
+    if d.get("taqui_conteo", 0) > 0: crono.append(f"{d.get('taqui_conteo')} episodios de taquicardia (FC máx {d.get('taqui_fc_max') or d.get('fc_max') or 0} lpm)")
+    if d.get("bradi_conteo", 0) > 0: crono.append(f"{d.get('bradi_conteo')} episodios de bradicardia (FC mín {d.get('bradi_fc_min') or d.get('fc_min') or 0} lpm)")
     p2 = f"2. Eventos cronotrópicos: Se documentaron {' y '.join(crono)}." if crono else "2. Eventos cronotrópicos: Sin bradicardia patológica ni taquicardias sostenidas."
 
     qtc = d.get("qtc_prom", 0)
@@ -783,14 +826,21 @@ def redactar_informe_holter_11_puntos(d, perfil):
     p7 = f"7. Impulsos alterados por {' y '.join(ect)}." if ect else "7. Sin alteración de impulsos ectópicos."
     p8 = f"8. Diario paciente: {d.get('eventos_paciente', 0)} eventos marcados." if d.get("eventos_paciente", 0) > 0 else "8. No refirió síntomas."
 
-    sdnn = d.get("sdnn_24h", 0)
-    if sdnn > 0 and sdnn <= 60 and not d.get("mcp_presente"): p9, p11, d_vfc = f"9. VFC severamente disminuida ({sdnn} ms).", "11. Riesgo autonómico: ALTO.", "VFC severamente disminuida (riesgo autonómico alto)."
-    elif sdnn > 0 and sdnn <= 120 and not d.get("mcp_presente"): p9, p11, d_vfc = f"9. VFC disminuida ({sdnn} ms).", "11. Riesgo autonómico: Moderado.", "VFC disminuida."
-    elif d.get("mcp_presente"): p9, p11, d_vfc = f"9. Variabilidad cardíaca modificada por MCP ({sdnn} ms).", "11. Evaluación dependiente del generador.", "Frecuencia regulada por dispositivo."
-    elif sdnn > 0: p9, p11, d_vfc = f"9. VFC conservada ({sdnn} ms).", "11. Riesgo autonómico: Bajo/Normal.", "VFC conservada."
-    else: p9, p11, d_vfc = "9. Variabilidad de la frecuencia cardíaca conservada.", "11. Riesgo autonómico: Bajo/Normal.", "VFC conservada."
+    # Lógica de Riesgo Autonómico del Dr. Amaya (Manejo correcto del valor 0 o faltante)
+    sdnn = d.get("sdnn_24h")
+    if sdnn is None or sdnn == 0:
+        p9, p11, d_vfc = "9. Variabilidad de la frecuencia cardíaca no evaluable.", "11. Riesgo autonómico: No valorable.", "VFC no evaluable."
+    elif sdnn < 30:
+        p9, p11, d_vfc = f"9. VFC severamente disminuida ({sdnn} ms).", "11. Riesgo autonómico: ALTO.", "VFC severamente disminuida (Riesgo Alto)."
+    elif sdnn <= 100:
+        p9, p11, d_vfc = f"9. VFC disminuida ({sdnn} ms).", "11. Riesgo autonómico: Moderado.", "VFC disminuida (Riesgo Moderado)."
+    else:
+        p9, p11, d_vfc = f"9. VFC conservada ({sdnn} ms).", "11. Riesgo autonómico: Bajo/Normal.", "VFC conservada."
 
-    p10 = f"10. Se registraron {d.get('pausas',0)} pausas significativas (máx {d.get('pausa_max_seg', 0.0)}s)." if d.get("pausas",0) > 0 else ("10. Dispositivo normofuncionante: adecuado sensado y captura." if d.get("mcp_presente") else "10. No hay pausas significativas.")
+    if d.get("mcp_presente"):
+        p9 += " (Modificada por estimulación de marcapasos)."
+
+    p10 = f"10. Se registraron {d.get('pausas',0)} pausas significativas (máx {d.get('pausa_max_seg') or 0.0}s)." if d.get("pausas",0) > 0 else ("10. Dispositivo normofuncionante: adecuado sensado y captura." if d.get("mcp_presente") else "10. No hay pausas significativas.")
 
     diag = f"Ritmo sinusal con FC promedio {fc_p} lpm. {d_vfc}"
     if d.get("mcp_presente"): diag = f"Ritmo comandado por marcapasos normofuncionante ({pct_mcp:.1f}%). FC promedio {fc_p} lpm."
@@ -810,15 +860,6 @@ def redactar_informe_mapa_cencardio(d, perfil):
     recs = "Continuar manejo farmacológico actual." if "óptimo" in ctrl else "Optimización y titulación de la terapia antihipertensiva."
     
     return f"INTERPRETACIÓN TEST MAPA - CUPS 895003\n\nHallazgos:\n{p1}\n{p2}\n{p3}\n{p4}\n5. {ctrl}.\n\nRECOMENDACIONES: {recs}\n\n{perfil['nombre_completo']}\n{perfil['especialidad']}\n{perfil['registro']}"
-
-def calcular_mets_bruce(tiempo_min):
-    if tiempo_min <= 0.1: return 0.0
-    if tiempo_min <= 3.0: return round(1.0 + (tiempo_min / 3.0) * 3.8, 1)
-    if tiempo_min <= 6.0: return round(4.8 + ((tiempo_min - 3.0) / 3.0) * 2.2, 1)
-    if tiempo_min <= 9.0: return round(7.0 + ((tiempo_min - 6.0) / 3.0) * 3.1, 1)
-    if tiempo_min <= 12.0: return round(10.1 + ((tiempo_min - 9.0) / 3.0) * 3.4, 1)
-    if tiempo_min <= 15.0: return round(13.5 + ((tiempo_min - 12.0) / 3.0) * 3.7, 1)
-    return round(17.2 + ((tiempo_min - 15.0) / 3.0) * 3.0, 1)
 
 def redactar_informe_ergometria_institucional(d, perfil):
     fcm_prev = 220 - d.get("edad", 35) if d.get("edad", 35) > 0 else 200
@@ -1115,7 +1156,7 @@ def generar_excel_avanzado_produccion(df_base):
     return output.getvalue(), "xlsx"
 
 # ==============================================================================
-# UI PRINCIPAL: BARRERA DE LOGIN Y NAVEGACIÓN
+# UI PRINCIPAL Y LOGIN
 # ==============================================================================
 LISTA_ESPECIALISTAS = [
     {"id": "dr.amaya", "etiqueta": "Dr. William Amaya Ramirez", "clave": "Cardio2025*", "nombre_completo": "DR. WILLIAM AMAYA RAMIREZ", "especialidad": "INTERNISTA - CARDIÓLOGO", "registro": "RM 79.502.624 SDS"},
@@ -1153,7 +1194,7 @@ if not st.session_state.autenticado:
                 if m["clave"] == pwd:
                     st.session_state.autenticado = True; st.session_state.usuario_actual = m["id"]
                     st.rerun()
-                else: st.error("❌ Contraseña incorrecta para el especialista seleccionado.")
+                else: st.error("❌ Contraseña incorrecta.")
         st.markdown('</div>', unsafe_allow_html=True)
     st.stop()
 
@@ -1178,10 +1219,10 @@ with st.sidebar:
 
 st.markdown(f'<div class="top-hospital-bar"><div><div style="font-size:1.35rem; font-weight:800; color:#0a2540;">CENCARDIO WORKSTATION</div><div style="font-size:0.82rem; font-weight:700; color:#c8102e;">Alta Complejidad</div></div><div style="display:flex; gap:8px;"><span class="inst-badge-success">{"Nube Supabase" if supabase else "Local SQLite"}</span><span class="inst-badge-primary">Triple Engine 100%</span></div></div>', unsafe_allow_html=True)
 
-tab_procesar, tab_historial = st.tabs(["📥 Procesamiento del Estudio", "📁 Archivo Clínico & Reportes Gerenciales"])
+tab_procesar, tab_historial = st.tabs(["📥 Procesamiento del Estudio", "📁 Archivo Clínico & Reportes"])
 
 # ==============================================================================
-# PESTAÑA 1: PROCESAMIENTO
+# PESTAÑA 1: PROCESAMIENTO (HOLTER, MAPA Y ESFUERZO)
 # ==============================================================================
 with tab_procesar:
     if "Esfuerzo" in mod_sel:
@@ -1263,7 +1304,7 @@ with tab_procesar:
                 b1.download_button("📄 DESCARGAR PDF", data=pdf_erg, file_name=f"{normalizar_nombre_archivo(p_nombre)}_Esfuerzo.pdf", mime="application/pdf", type="primary", use_container_width=True)
                 if b2.button("💾 Guardar Clínico", use_container_width=True):
                     guardar_estudio_servicio(p_nombre, "Prueba de Esfuerzo", "CUPS 893805", f"FC Pico: {p_fc_pico} | {p_mets} METs", perfil_activo['nombre_completo'], txt_erg_final, pdf_erg, uid)
-                    st.success("✅ Guardado en Archivo Clínico.")
+                    st.success("✅ Guardado.")
                 
                 if p_celular:
                     tel_l = re.sub(r'\D', '', p_celular)
@@ -1277,7 +1318,7 @@ with tab_procesar:
         if up_file:
             b_pdf = up_file.getvalue()
             if st.session_state.get("last_file") != up_file.name:
-                with st.spinner("🚀 Ejecutando TRIPLE ENGINE (Extracción C++ Exacta + IA 100% PDF + Auditoría Silenciosa)..."):
+                with st.spinner("🚀 Ejecutando TRIPLE ENGINE (Extracción Precisa + IA 100% PDF + Auditoría Silenciosa)..."):
                     mod = "HOLTER" if "Holter" in mod_sel else "MAPA"
                     d_final = ejecutar_triple_engine_universal(b_pdf, mod)
                     st.session_state.d_final = d_final
@@ -1298,20 +1339,23 @@ with tab_procesar:
             for a in ale: st.warning(f"⚠️ {a}")
             
             if d.get("notas_arbitraje"):
-                with st.expander("🛡️ REPORTE DE ARBITRAJE TRIPLE ENGINE (Alertas y Conflictos)", expanded=True):
+                with st.expander("🛡️ REPORTE DE ARBITRAJE TRIPLE ENGINE (Alertas y Resoluciones)", expanded=True):
                     for n in d["notas_arbitraje"]: 
                         if "CRÍTICO" in n or "⚠️" in n or "🚨" in n or "⚖️" in n or "🔒" in n: st.warning(n)
                         else: st.info(n)
             
             c1, c2, c3, c4 = st.columns(4)
             if mod_actual == "HOLTER":
-                # UI ajustada para que el tacograma y los campos muestren los datos correctamente
-                fc_dia_disp = d.get('fc_dia') or d.get('fc_prom', 0)
-                fc_noc_disp = d.get('fc_noc') or d.get('fc_prom', 0)
-                c1.metric("FC Promedio", f"{d.get('fc_prom',0)} lpm", f"Día {fc_dia_disp} / Noche {fc_noc_disp}")
-                c2.metric("Ectopias V", f"{d.get('ev_total',0)} EV", f"TV: {d.get('tv_episodios',0)}")
-                c3.metric("Pausas", f"{d.get('pausas',0)}", f"Máx: {d.get('pausa_max_seg') or 0.0}s")
-                c4.metric("SDNN / MCP", f"{d.get('sdnn_24h',0)} ms", f"MCP: {d.get('mcp_porcentaje') or 0.0}%")
+                # UI limpia, si no hay Dia/Noche no ensucia.
+                fc_dia_disp = d.get('fc_dia') or "N/A"
+                fc_noc_disp = d.get('fc_noc') or "N/A"
+                c1.metric("FC Promedio", f"{d.get('fc_prom') or 0} lpm", f"Día {fc_dia_disp} / Noche {fc_noc_disp}")
+                c2.metric("Ectopias V", f"{d.get('ev_total') or 0} EV", f"TV: {d.get('tv_episodios') or 0}")
+                c3.metric("Pausas", f"{d.get('pausas') or 0}", f"Máx: {d.get('pausa_max_seg') or 0.0}s")
+                
+                sdnn_v = d.get('sdnn_24h')
+                sdnn_disp = f"{sdnn_v} ms" if sdnn_v else "N/A"
+                c4.metric("SDNN / MCP", sdnn_disp, f"MCP: {d.get('mcp_porcentaje') or 0.0}%")
                 
                 fig_taco = generar_grafica_tacograma(d)
                 st.plotly_chart(fig_taco, use_container_width=True)
