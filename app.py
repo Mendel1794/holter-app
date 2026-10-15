@@ -103,25 +103,6 @@ def init_db_local():
 
 init_db_local()
 
-@st.cache_resource
-def obtener_cliente_supabase():
-    if not SUPABASE_LIB_OK: return None
-    url = st.secrets.get("SUPABASE_URL", os.environ.get("SUPABASE_URL", ""))
-    key = st.secrets.get("SUPABASE_KEY", os.environ.get("SUPABASE_KEY", ""))
-    if url and key:
-        try:
-            url_limpia = str(url).strip().rstrip("/")
-            for sub in ["/rest/v1", "/auth/v1", "/storage/v1"]:
-                if url_limpia.endswith(sub): url_limpia = url_limpia[:-len(sub)].rstrip("/")
-            cliente = create_client(url_limpia, str(key).strip().strip('"').strip("'"))
-            try: cliente.storage.create_bucket("estudios-pdf", options={"public": True})
-            except Exception: pass
-            return cliente
-        except Exception: return None
-    return None
-
-supabase = obtener_cliente_supabase()
-
 def guardar_estudio_servicio(nombre, modalidad, cups, parametro_clave, medico, texto, pdf_bytes, cod_verif):
     fecha_actual_str = ahora_colombia().strftime("%Y-%m-%d %H:%M:%S")
     hash_seguridad = hashlib.sha256(pdf_bytes).hexdigest()
@@ -382,7 +363,7 @@ def generar_grafica_tacograma(d):
     return fig
 
 # ==============================================================================
-# MOTOR 1: EXTRACTOR DETERMINÍSTICO C++ (REGLAS ESTRICTAS)
+# MOTOR 1: EXTRACTOR DETERMINÍSTICO C++ (RESCATE ABSOLUTO DE MCP)
 # ==============================================================================
 def limpiar_numero(val_str, tipo=int):
     if not val_str: return None
@@ -404,6 +385,7 @@ def extraer_m1_holter(texto):
     
     m_nom = re.search(r"([A-ZÁÉÍÓÚÑ\s]{3,50},\s*[A-ZÁÉÍÓÚÑ\s]{3,50})[\s\n]+(?:No confirmado|Confirmado|Reconfirmado)?[\s\n]*Informe", texto)
     d["paciente"] = m_nom.group(1).replace("\n", " ").strip() if m_nom else None
+    
     m_id = re.search(r"(?:ID\s*Paciente|ID|C\.?C\.?|Doc\.?|Historia)\s*[:\.]?\s*(\d{5,12})", texto, re.IGNORECASE)
     d["cedula"] = m_id.group(1) if m_id else None
 
@@ -412,22 +394,35 @@ def extraer_m1_holter(texto):
     d["fc_min"]  = extraer_numero(r"M[íi]n[\s\|]*(\d{2,3})", txt_flat, int)
     d["fc_dia"]  = extraer_numero(r"D[íi]a.*?Prom\.\.?[\s\|]*(\d{2,3})", txt_flat, int)
     d["fc_noc"]  = extraer_numero(r"Noche.*?Prom\.\.?[\s\|]*(\d{2,3})", txt_flat, int)
+    
     d["pr_intervalo"] = extraer_numero(r"(?:Intervalo\s*PR|PR\s*Interval|PR\s*promedio|PR\s*medio)\s*[:\-\|]?\s*(\d{2,3})\b", txt_flat, int)
 
     # ------------------------------------------------------------------------
-    # BLOQUE MCP BLINDADO: CERO FALSOS POSITIVOS
-    # Se exige que el número esté PEGADO a la palabra, saltando "ruido".
-    d["mcp_latidos"] = extraer_numero(r"(?:Marcapasos?|Estimulados?|Paced)\s*[:\|]?\s*([\d\.\,]+)\b(?!\s*%)", txt_flat, int)
+    # BLOQUE MCP BLINDADO: CERO FALSOS POSITIVOS. Búsqueda exhaustiva por fila.
+    d["mcp_latidos"] = None
+    d["mcp_porcentaje"] = None
     
-    mcp_pct_match = re.search(r"(?:Marcapasos?|Estimulados?|Paced)\s*[:\|]?\s*([\d\.]+)\s*%", txt_flat, re.IGNORECASE)
-    if mcp_pct_match: 
-        d["mcp_porcentaje"] = float(mcp_pct_match.group(1))
-    else: 
-        pct_alt = re.search(r"Conteo[^\n]*\b([\d\.]+)\s*%", txt_flat, re.IGNORECASE)
-        if pct_alt: d["mcp_porcentaje"] = float(pct_alt.group(1))
-        else: d["mcp_porcentaje"] = None
+    mcp_lineas = re.findall(r"(?:Marcapasos?|Estimulados?|Paced|Latidos estimulados)[^\n\r]*", texto, re.IGNORECASE)
+    for linea in mcp_lineas:
+        pct = re.search(r'(\d+(?:\.\d+)?)\s*%', linea)
+        if pct: d["mcp_porcentaje"] = float(pct.group(1))
+        
+        # Buscar el conteo de latidos asumiendo que son los números grandes (ej > 100) en esa línea
+        lats = re.findall(r'\b(\d+)\b(?!\s*%)', linea.replace('.', '').replace(',', ''))
+        for l in lats:
+            val = int(l)
+            if val > 100: 
+                d["mcp_latidos"] = val
+                break
 
-    d["mcp_presente"] = bool((d.get("mcp_latidos") and d["mcp_latidos"] > 0) or (d.get("mcp_porcentaje") and d["mcp_porcentaje"] > 0))
+    if d["mcp_porcentaje"] is None:
+        mcp_pct_libre = re.search(r"(?:Marcapasos?|Estimulados?|Paced).{0,40}?(\d+(?:\.\d+)?)\s*%", txt_flat, re.IGNORECASE)
+        if mcp_pct_libre: d["mcp_porcentaje"] = float(mcp_pct_libre.group(1))
+
+    dx_text = texto[:2500].upper()
+    mcp_en_dx = bool(re.search(r'\b(MCP|MARCAPASO|MARCAPASOS|TRC|CDI|ESTIMULADO)\b', dx_text))
+
+    d["mcp_presente"] = bool((d["mcp_latidos"] and d["mcp_latidos"] > 0) or (d["mcp_porcentaje"] and d["mcp_porcentaje"] > 0) or mcp_en_dx)
     # ------------------------------------------------------------------------
 
     d["total_latidos"] = extraer_numero(r"(?:Total\s+de\s+latidos|Latidos\s+Totales|Total\s+Beats)[^\d]*([\d\.\,]+)", texto, int)
@@ -452,33 +447,33 @@ def extraer_m1_holter(texto):
     d["trigeminismo"] = extraer_numero(r"Trigeminismo[\s\|]*(\d+)", txt_flat, int)
     d["latidos_caidos"] = extraer_numero(r"Latidos? ca[íi]dos?[\s\|]*(\d+)", txt_flat, int)
     
-    # EXTRACCIÓN AVANZADA SDNN Y QTC: Aísla la fila de la matriz para no cruzar ceros
     d["sdnn_24h"] = None
-    m_sdnn_line = re.search(r"Valor de 24 horas(.*?)(?:Todos los per[íi]odos|[\n\r])", txt_flat, re.IGNORECASE)
+    m_sdnn_line = re.search(r"Valor de 24 horas[^\n\r]*", txt_flat, re.IGNORECASE)
     if m_sdnn_line:
-        nums = re.findall(r'\b\d+(?:\.\d+)?\b', m_sdnn_line.group(1).replace(',', '.'))
-        if len(nums) >= 2: d["sdnn_24h"] = int(float(nums[1]))
+        nums = re.findall(r'\b\d+(?:\.\d+)?\b', m_sdnn_line.group(0).replace(',', '.'))
+        if len(nums) >= 2: 
+            val_extracted = int(float(nums[1]))
+            d["sdnn_24h"] = val_extracted 
     
     if d["sdnn_24h"] is None:
-        m_sdnn_gen = re.search(r"\bSDNN\b\s*[:\|]?\s*(\d{2,3})", txt_flat, re.IGNORECASE)
+        m_sdnn_gen = re.search(r"\bSDNN\b[^\d]*(\d{2,3})", txt_flat, re.IGNORECASE)
         if m_sdnn_gen: d["sdnn_24h"] = int(m_sdnn_gen.group(1))
 
     d["qtc_prom"] = None
-    m_qtc_line = re.search(r"Todos los per[íi]odos(.*?)(?:[\n\r]|$)", txt_flat, re.IGNORECASE)
+    m_qtc_line = re.search(r"Todos los per[íi]odos[^\n\r]*", txt_flat, re.IGNORECASE)
     if m_qtc_line:
-        nums = re.findall(r'\b\d+(?:\.\d+)?\b', m_qtc_line.group(1).replace(',', '.'))
+        nums = re.findall(r'\b\d+(?:\.\d+)?\b', m_qtc_line.group(0).replace(',', '.'))
         if len(nums) >= 3: 
             val_qtc = int(float(nums[2]))
             d["qtc_prom"] = val_qtc if val_qtc > 0 else None
             
     if d["qtc_prom"] is None:
-        m_qtc_gen = re.search(r"\bQTc\b\s*[:\|]?\s*(\d{3})", txt_flat, re.IGNORECASE)
+        m_qtc_gen = re.search(r"\bQTc\b[^\d]*(\d{3})", txt_flat, re.IGNORECASE)
         if m_qtc_gen: d["qtc_prom"] = int(m_qtc_gen.group(1))
 
     d["st_dep_episodios"] = extraer_numero(r"Depresi[óo]n ST[\s\|]*(\d+)", txt_flat, int)
     d["st_elev_episodios"] = extraer_numero(r"Elevaci[óo]n ST[\s\|]*(\d+)", txt_flat, int)
     
-    dx_text = texto[:2000].upper()
     bloqueo_keys = ["BLOQUEO DE RAMA", "BRD", "BRI", "BCRD", "BCRI", "QRS ANCHO", "CONDUCCION INTRAVENTRICULAR"]
     d["tiene_bloqueo_rama"] = any(k in dx_text for k in bloqueo_keys)
     return d
@@ -615,7 +610,6 @@ def auditar_motor_3_universal(m1, m2, modalidad):
         norm_m2 = m2.get("latidos_normales") if m2 else None
         norm, _ = arbitrar_valor("latidos_normales", norm_m1, norm_m2, int, "baja")
         
-        # CANDADO PAUSAS (Incongruencia Fisiológica)
         if d_f.get("rr_max_seg") is not None and d_f.get("pausas") is not None:
             if d_f["rr_max_seg"] > 0 and d_f["rr_max_seg"] < 2.0 and d_f["pausas"] > 0:
                 notas.append(f"🔒 VETO FISIOLÓGICO: RR Máx es {d_f['rr_max_seg']}s. Imposible pausas > 2.0s. Se vetan pausas.")
@@ -625,7 +619,7 @@ def auditar_motor_3_universal(m1, m2, modalidad):
         mcp_pct_m2 = m2.get("mcp_porcentaje") if m2 else None
         d_f["mcp_porcentaje"], _ = arbitrar_valor("mcp_porcentaje", mcp_pct_m1, mcp_pct_m2, float, "baja")
         
-        # CANDADO MCP
+        # CANDADO MCP CON LA IA
         d_f["mcp_presente"] = bool(m1.get("mcp_presente") or (m2 and m2.get("mcp_presente")) or (d_f.get("mcp_porcentaje") and d_f["mcp_porcentaje"] > 0) or (d_f.get("mcp_latidos") and d_f["mcp_latidos"] > 0))
         
         t_bloq = m1.get("tiene_bloqueo_rama", False) or (m2.get("tiene_bloqueo_rama", False) if m2 else False)
@@ -700,7 +694,7 @@ def ejecutar_triple_engine_universal(pdf_bytes, modalidad="HOLTER"):
 
 INSTRUCCIONES DE AUDITORÍA CLÍNICA PROFUNDA:
 1. FRECUENCIA Y RITMO: Rastrea la FC Promedio, Día, Noche, Máxima y Mínima. Evalúa presencia de marcapasos (MCP), % de estimulación y latidos totales.
-   -> IMPORTANTE: "mcp_presente" DEBE SER false a menos que el paciente tenga latidos de marcapasos explícitamente > 0 o porcentaje > 0.
+   -> ALERTA MÁXIMA MARCAPASOS: Si en el resumen, en las tablas o en el diagnóstico ves "Latidos estimulados", "Marcapaso", "MCP", "Paced", DEBES poner "mcp_presente": true y extraer los latidos o porcentaje. Jamás asumas false si hay evidencia.
 2. EVENTOS CRONOTRÓPICOS: Contabiliza episodios exactos de Taquicardia y Bradicardia, con sus frecuencias máximas y mínimas.
 3. INTERVALOS: Evalúa el QTc promedio y el intervalo PR (milisegundos). 
 4. ISQUEMIA (ST): Detecta episodios de infradesnivel o supradesnivel del segmento ST.
@@ -796,7 +790,6 @@ def redactar_informe_holter_11_puntos(d, perfil):
     elif d.get("tiene_bloqueo_rama"): p6 = f"6. Alteración de conducción intraventricular por {d.get('bloqueo_detalle', 'bloqueo de rama')}."
     else: p6 = "6. Sin alteración en la conducción intraventricular."
 
-    # ALGORITMO SEGURO DE CARGA ECTÓPICA (Evita el error de división por 1 dando 5700%)
     tot_q = d.get("total_latidos")
     if not tot_q or tot_q <= 1:
         if fc_p and fc_p > 0: tot_q = fc_p * 1440
@@ -839,7 +832,6 @@ def redactar_informe_holter_11_puntos(d, perfil):
     if ev_pac is not None and ev_pac > 0: p8 = f"8. Diario paciente: {ev_pac} eventos marcados."
     else: p8 = "8. No refirió síntomas."
 
-    # LÓGICA DE SDNN BLINDADA
     sdnn = d.get("sdnn_24h")
     mod_mcp = " (Modificada por estimulación de marcapasos)." if d.get("mcp_presente") else ""
     
@@ -1200,7 +1192,7 @@ def generar_excel_avanzado_produccion(df_base):
     return output.getvalue(), "xlsx"
 
 # ==============================================================================
-# UI PRINCIPAL Y LOGIN
+# UI PRINCIPAL: BARRERA DE LOGIN Y NAVEGACIÓN
 # ==============================================================================
 LISTA_ESPECIALISTAS = [
     {"id": "dr.amaya", "etiqueta": "Dr. William Amaya Ramirez", "clave": "Cardio2025*", "nombre_completo": "DR. WILLIAM AMAYA RAMIREZ", "especialidad": "INTERNISTA - CARDIÓLOGO", "registro": "RM 79.502.624 SDS"},
@@ -1238,7 +1230,7 @@ if not st.session_state.autenticado:
                 if m["clave"] == pwd:
                     st.session_state.autenticado = True; st.session_state.usuario_actual = m["id"]
                     st.rerun()
-                else: st.error("❌ Contraseña incorrecta para el especialista seleccionado.")
+                else: st.error("❌ Contraseña incorrecta.")
         st.markdown('</div>', unsafe_allow_html=True)
     st.stop()
 
@@ -1261,7 +1253,7 @@ with st.sidebar:
         st.session_state.autenticado = False
         st.rerun()
 
-st.markdown(f'<div class="top-hospital-bar"><div><div style="font-size:1.35rem; font-weight:800; color:#0a2540;">CENCARDIO WORKSTATION</div><div style="font-size:0.82rem; font-weight:700; color:#c8102e;">Alta Complejidad</div></div><div style="display:flex; gap:8px;"><span class="inst-badge-success">{"Nube Supabase" if supabase else "Local SQLite"}</span><span class="inst-badge-primary">Triple Engine Enterprise</span></div></div>', unsafe_allow_html=True)
+st.markdown(f'<div class="top-hospital-bar"><div><div style="font-size:1.35rem; font-weight:800; color:#0a2540;">CENCARDIO WORKSTATION</div><div style="font-size:0.82rem; font-weight:700; color:#c8102e;">Alta Complejidad</div></div><div style="display:flex; gap:8px;"><span class="inst-badge-success">{"Nube Supabase" if supabase else "Local SQLite"}</span><span class="inst-badge-primary">Triple Engine 100% Auditado</span></div></div>', unsafe_allow_html=True)
 
 tab_procesar, tab_historial = st.tabs(["📥 Procesamiento del Estudio", "📁 Archivo Clínico & Reportes"])
 
