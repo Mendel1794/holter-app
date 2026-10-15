@@ -41,7 +41,7 @@ except ImportError:
     SUPABASE_LIB_OK = False
 
 st.set_page_config(
-    page_title="Centro Cardiovascular Colombiano CENCARDIO · Workstation Enterprise",
+    page_title="Centro Cardiovascular Colombiano CENCARDIO · Workstation",
     page_icon="🫀",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -313,7 +313,7 @@ def mostrar_semaforizacion_clinica(modalidad, datos):
 
         if detalles: nivel, titulo = "ROJO", "ALERTA CLÍNICA: HALLAZGOS CRÍTICOS"
         else:
-            if mcp: detalles.append(f"Paciente portador de Dispositivo Cardíaco ({datos.get('mcp_porcentaje') or 0.0:.1f}%)")
+            if mcp: detalles.append(f"Paciente portador de Dispositivo Cardíaco")
             if pr_int is not None and pr_int > 200: detalles.append(f"Bloqueo AV documentado (PR: {pr_int} ms)")
             if duplas and duplas > 0: detalles.append(f"Ectopia Ventricular Compleja: Duplas presentes ({duplas})")
             if tsv and tsv > 0: detalles.append(f"Taquicardia Supraventricular paroxística ({tsv} rachas)")
@@ -387,7 +387,7 @@ def generar_grafica_tacograma(d):
     return fig
 
 # ==============================================================================
-# MOTOR 1: EXTRACTOR DETERMINÍSTICO C++ (REGLAS ESTRICTAS Y BLINDADAS)
+# MOTOR 1: EXTRACTOR DETERMINÍSTICO C++ (BÚSQUEDA OMNIDIRECCIONAL)
 # ==============================================================================
 def limpiar_numero(val_str, tipo=int):
     if not val_str: return None
@@ -420,18 +420,22 @@ def extraer_m1_holter(texto):
     d["fc_noc"]  = extraer_numero(r"Noche.*?Prom\.\.?[\s\|]*(\d{2,3})", txt_flat, int)
     d["pr_intervalo"] = extraer_numero(r"(?:Intervalo\s*PR|PR\s*Interval|PR\s*promedio|PR\s*medio)\s*[:\-\|]?\s*(\d{2,3})\b", txt_flat, int)
 
-    # REGLA ESTRICTA DE MCP: SIN SALTOS CIEGOS
-    d["mcp_latidos"] = extraer_numero(r"(?:Marcapasos?|Estimulados?|Paced)\s*[:\|]?\s*([\d\.\,]+)\b(?!\s*%)", txt_flat, int)
-    
-    mcp_pct_match = re.search(r"(?:Marcapasos?|Estimulados?|Paced)\s*[:\|]?\s*([\d\.]+)\s*%", txt_flat, re.IGNORECASE)
-    if mcp_pct_match: 
-        d["mcp_porcentaje"] = float(mcp_pct_match.group(1))
-    else: 
-        pct_alt = re.search(r"Conteo[^\n]*\b([\d\.]+)\s*%", txt_flat, re.IGNORECASE)
-        if pct_alt: d["mcp_porcentaje"] = float(pct_alt.group(1))
-        else: d["mcp_porcentaje"] = None
+    # ------------------------------------------------------------------------
+    # BÚSQUEDA OMNIDIRECCIONAL DE MARCAPASOS (Motor 1): Salta ruido, barre 60 caracteres
+    d["mcp_porcentaje"] = None
+    d["mcp_latidos"] = None
 
-    d["mcp_presente"] = bool((d.get("mcp_latidos") and d["mcp_latidos"] > 0) or (d.get("mcp_porcentaje") and d["mcp_porcentaje"] > 0))
+    mcp_pct_match = re.search(r"(?:Marcapasos?|Estimulados?|Paced|Latidos estimulados).{0,60}?\b([\d\.]+)\s*%", txt_flat, re.IGNORECASE)
+    if mcp_pct_match: d["mcp_porcentaje"] = float(mcp_pct_match.group(1))
+
+    mcp_lat_match = re.search(r"(?:Marcapasos?|Estimulados?|Paced|Latidos estimulados).{0,40}?\b(\d{3,})\b(?!\s*%)", txt_flat, re.IGNORECASE)
+    if mcp_lat_match: d["mcp_latidos"] = limpiar_numero(mcp_lat_match.group(1), int)
+
+    dx_text = texto[:2500].upper()
+    mcp_en_dx = bool(re.search(r'\b(MCP|MARCAPASO|MARCAPASOS|TRC|CDI|ESTIMULADO)\b', dx_text))
+
+    d["mcp_presente"] = bool((d.get("mcp_latidos") and d["mcp_latidos"] > 0) or (d.get("mcp_porcentaje") and d["mcp_porcentaje"] > 0) or mcp_en_dx)
+    # ------------------------------------------------------------------------
 
     d["total_latidos"] = extraer_numero(r"(?:Total\s+de\s+latidos|Latidos\s+Totales|Total\s+Beats)[^\d]*([\d\.\,]+)", texto, int)
     if not d["total_latidos"]:
@@ -456,31 +460,30 @@ def extraer_m1_holter(texto):
     d["latidos_caidos"] = extraer_numero(r"Latidos? ca[íi]dos?[\s\|]*(\d+)", txt_flat, int)
     
     d["sdnn_24h"] = None
-    m_sdnn_line = re.search(r"Valor de 24 horas(.*?)(?:Todos los per[íi]odos|[\n\r])", txt_flat, re.IGNORECASE)
+    m_sdnn_line = re.search(r"Valor de 24 horas[^\n\r]*", txt_flat, re.IGNORECASE)
     if m_sdnn_line:
-        nums = re.findall(r'\b\d+(?:\.\d+)?\b', m_sdnn_line.group(1).replace(',', '.'))
+        nums = re.findall(r'\b\d+(?:\.\d+)?\b', m_sdnn_line.group(0).replace(',', '.'))
         if len(nums) >= 2: d["sdnn_24h"] = int(float(nums[1]))
     
     if d["sdnn_24h"] is None:
-        m_sdnn_gen = re.search(r"\bSDNN\b\s*[:\|]?\s*(\d{2,3})", txt_flat, re.IGNORECASE)
+        m_sdnn_gen = re.search(r"\bSDNN\b[^\d]*(\d{2,3})", txt_flat, re.IGNORECASE)
         if m_sdnn_gen: d["sdnn_24h"] = int(m_sdnn_gen.group(1))
 
     d["qtc_prom"] = None
-    m_qtc_line = re.search(r"Todos los per[íi]odos(.*?)(?:[\n\r]|$)", txt_flat, re.IGNORECASE)
+    m_qtc_line = re.search(r"Todos los per[íi]odos[^\n\r]*", txt_flat, re.IGNORECASE)
     if m_qtc_line:
-        nums = re.findall(r'\b\d+(?:\.\d+)?\b', m_qtc_line.group(1).replace(',', '.'))
+        nums = re.findall(r'\b\d+(?:\.\d+)?\b', m_qtc_line.group(0).replace(',', '.'))
         if len(nums) >= 3: 
             val_qtc = int(float(nums[2]))
             d["qtc_prom"] = val_qtc if val_qtc > 0 else None
             
     if d["qtc_prom"] is None:
-        m_qtc_gen = re.search(r"\bQTc\b\s*[:\|]?\s*(\d{3})", txt_flat, re.IGNORECASE)
+        m_qtc_gen = re.search(r"\bQTc\b[^\d]*(\d{3})", txt_flat, re.IGNORECASE)
         if m_qtc_gen: d["qtc_prom"] = int(m_qtc_gen.group(1))
 
     d["st_dep_episodios"] = extraer_numero(r"Depresi[óo]n ST[\s\|]*(\d+)", txt_flat, int)
     d["st_elev_episodios"] = extraer_numero(r"Elevaci[óo]n ST[\s\|]*(\d+)", txt_flat, int)
     
-    dx_text = texto[:2000].upper()
     bloqueo_keys = ["BLOQUEO DE RAMA", "BRD", "BRI", "BCRD", "BCRI", "QRS ANCHO", "CONDUCCION INTRAVENTRICULAR"]
     d["tiene_bloqueo_rama"] = any(k in dx_text for k in bloqueo_keys)
     return d
@@ -513,7 +516,7 @@ def extraer_m1_esfuerzo(texto):
     return d
 
 # ==============================================================================
-# MOTOR 2: INTELIGENCIA ARTIFICIAL GEMINI (CEREBRO CLÍNICO COMPLETO)
+# MOTOR 2: INTELIGENCIA ARTIFICIAL GEMINI (CEREBRO CLÍNICO LIBERADO)
 # ==============================================================================
 def consultar_gemini_json(prompt_text, inline_items=None):
     key = str(st.secrets.get("GEMINI_API_KEY", os.environ.get("GEMINI_API_KEY", ""))).strip().strip('"').strip("'")
@@ -626,8 +629,8 @@ def auditar_motor_3_universal(m1, m2, modalidad):
         mcp_pct_m2 = m2.get("mcp_porcentaje") if m2 else None
         d_f["mcp_porcentaje"], _ = arbitrar_valor("mcp_porcentaje", mcp_pct_m1, mcp_pct_m2, float, "baja")
         
-        # CANDADO DE MARCAPASOS REVISADO
-        d_f["mcp_presente"] = bool(m1.get("mcp_presente") or (m2 and m2.get("mcp_presente")) or (d_f.get("mcp_porcentaje") and d_f["mcp_porcentaje"] > 0) or (d_f.get("mcp_latidos") and d_f["mcp_latidos"] > 0))
+        # LA IA AHORA TIENE PODER CLÍNICO SOBRE EL MOTOR 1
+        d_f["mcp_presente"] = bool(m1.get("mcp_presente") or (m2 and m2.get("mcp_presente")))
         
         t_bloq = m1.get("tiene_bloqueo_rama", False) or (m2.get("tiene_bloqueo_rama", False) if m2 else False)
         if d_f["mcp_presente"] and (d_f.get("mcp_porcentaje") or 0) >= 50.0:
@@ -697,22 +700,23 @@ def ejecutar_triple_engine_universal(pdf_bytes, modalidad="HOLTER"):
     doc.close()
 
     if modalidad == "HOLTER":
-        prompt_ia = f"""Eres el Jefe de Electrofisiología Clínica. Realiza una auditoría médica exhaustiva de este estudio Holter de 24 horas ({total_pags} páginas).
+        # EL NUEVO CEREBRO CLÍNICO: ORDEN DE ALERTA ROJA PARA MARCAPASOS
+        prompt_ia = f"""Eres el Jefe de Electrofisiología Clínica. Tu labor es realizar un análisis CLÍNICO INTEGRAL de este estudio Holter de 24 horas ({total_pags} páginas). No eres un buscador de texto; debes usar tu juicio médico.
 
-INSTRUCCIONES DE AUDITORÍA CLÍNICA PROFUNDA:
-1. FRECUENCIA Y RITMO: Rastrea la FC Promedio, Día, Noche, Máxima y Mínima.
-   -> IMPORTANTE (MARCAPASOS): El valor "mcp_presente" DEBE SER FALSE a menos que extraigas explícitamente un número mayor a 0 en latidos o porcentaje de estimulación.
-2. EVENTOS CRONOTRÓPICOS: Contabiliza episodios de Taquicardia y Bradicardia.
-3. INTERVALOS: Evalúa el QTc promedio y el intervalo PR (milisegundos). 
-4. ISQUEMIA (ST): Detecta episodios de infradesnivel o supradesnivel del segmento ST.
-5. CONDUCCIÓN AV: Identifica latidos caídos o bloqueos AV.
-6. CONDUCCIÓN INTRAVENTRICULAR: Busca bloqueos de rama (BRI/BRD) o complejos anchos.
-7. ECTOPIAS Y ARRITMIAS: Extrae conteo de EV, ESV, Duplas, Salvas de TSV/TV, Bigeminismo o Trigeminismo.
-8. SÍNTOMAS: Eventos marcados por el paciente.
-9. VARIABILIDAD (HRV/SDNN): Busca el SDNN real en ms. Devuelve 'null' si la tabla de variabilidad tiene puros ceros.
-10. PAUSAS: Detecta pausas significativas y su duración máxima (pausa_max_seg).
+INSTRUCCIONES DE AUDITORÍA CLÍNICA:
+1. MARCAPASOS (MCP) - LEY CLÍNICA ABSOLUTA: Lee el diagnóstico, las conclusiones, las indicaciones y TODAS las tablas. Si existe CUALQUIER evidencia clínica de que el paciente es portador de marcapasos (ej. "latidos estimulados", "ritmo de marcapasos", "espigas", "MCP", "Paced"), el valor "mcp_presente" DEBE SER obligatoriamente true. Extrae los latidos y el porcentaje si están disponibles.
+2. FRECUENCIA Y RITMO: Rastrea la FC Promedio, Día, Noche, Máxima y Mínima.
+3. EVENTOS CRONOTRÓPICOS: Contabiliza episodios de Taquicardia y Bradicardia.
+4. INTERVALOS: Evalúa el QTc promedio y el intervalo PR (milisegundos). 
+5. ISQUEMIA (ST): Detecta episodios de infradesnivel o supradesnivel del segmento ST.
+6. CONDUCCIÓN AV: Identifica latidos caídos o bloqueos AV.
+7. CONDUCCIÓN INTRAVENTRICULAR: Busca bloqueos de rama (BRI/BRD) o complejos anchos.
+8. ECTOPIAS Y ARRITMIAS: Extrae conteo de EV, ESV, Duplas, Salvas de TSV/TV, Bigeminismo o Trigeminismo.
+9. SÍNTOMAS: Eventos marcados por el paciente.
+10. VARIABILIDAD (HRV/SDNN): Busca el SDNN real en ms.
+11. PAUSAS: Detecta pausas significativas y su duración máxima (pausa_max_seg).
 
-Devuelve ÚNICAMENTE un objeto JSON estricto. Usa 'null' explícito si el dato NO está escrito o es una tabla vacía. NO asumas.
+Devuelve ÚNICAMENTE un objeto JSON estricto. Usa null explícito si el dato NO está escrito o es una tabla vacía. NO asumas.
 {{"paciente": "str", "cedula": "str", "mcp_presente": bool, "mcp_latidos": int, "mcp_porcentaje": float, "fc_prom": int, "fc_dia": int, "fc_noc": int, "fc_max": int, "fc_min": int, "total_latidos": int, "latidos_normales": int, "pausas": int, "rr_max_seg": float, "pausa_max_seg": float, "ev_total": int, "tv_episodios": int, "ev_duplas": int, "esv_total": int, "tsv_episodios": int, "sdnn_24h": int, "qtc_prom": int, "pr_intervalo": int, "st_dep_episodios": int, "st_elev_episodios": int, "eventos_paciente": int, "tiene_bloqueo_rama": bool, "taqui_conteo": int, "bradi_conteo": int, "taqui_fc_max": int, "bradi_fc_min": int, "latidos_caidos": int, "bigeminismo": int, "trigeminismo": int}}"""
     elif modalidad == "MAPA":
         prompt_ia = f"""Eres Auditor Médico Jefe. Analiza las {total_pags} imágenes y el texto de este MAPA.
@@ -797,7 +801,7 @@ def redactar_informe_holter_11_puntos(d, perfil):
     elif d.get("tiene_bloqueo_rama"): p6 = f"6. Alteración de conducción intraventricular por {d.get('bloqueo_detalle', 'bloqueo de rama')}."
     else: p6 = "6. Sin alteración en la conducción intraventricular."
 
-    # LÓGICA DE CARGA BLINDADA (FÓRMULA SEGURA)
+    # ALGORITMO SEGURO DE CARGA ECTÓPICA (Evita división por 1 y falsos porcentajes)
     tot_q = d.get("total_latidos")
     if not tot_q or tot_q <= 1:
         if fc_p and fc_p > 0: tot_q = fc_p * 1440
