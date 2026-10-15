@@ -24,6 +24,7 @@ TZ_COLOMBIA = timezone(timedelta(hours=-5))
 def ahora_colombia():
     return datetime.now(TZ_COLOMBIA)
 
+# Importación segura de openpyxl (Excel Avanzado)
 try:
     import openpyxl
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -32,6 +33,7 @@ try:
 except ImportError:
     OPENPYXL_INSTALADO = False
 
+# Importación segura de Supabase (Nube)
 try:
     from supabase import create_client, Client
     SUPABASE_LIB_OK = True
@@ -39,14 +41,14 @@ except ImportError:
     SUPABASE_LIB_OK = False
 
 st.set_page_config(
-    page_title="Centro Cardiovascular Colombiano CENCARDIO · Workstation",
+    page_title="Centro Cardiovascular Colombiano CENCARDIO · Workstation Enterprise",
     page_icon="🫀",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
 # ==============================================================================
-# ESTILOS E INTERFAZ INSTITUCIONAL
+# GESTIÓN DE LOGOTIPO INSTITUCIONAL Y ESTILOS UI
 # ==============================================================================
 @st.cache_data
 def obtener_logo_b64():
@@ -73,9 +75,9 @@ def cargar_estilos_institucionales():
     .stTabs [data-baseweb="tab"] { border-radius: 8px !important; padding: 9px 22px !important; font-weight: 700 !important; font-size: 0.88rem !important; color: #64748b !important; }
     .stTabs [aria-selected="true"] { background-color: #0a2540 !important; color: #ffffff !important; }
     .specialist-card { background: linear-gradient(135deg, #0a2540 0%, #133863 100%); border-radius: 14px; padding: 1.1rem; color: #ffffff; margin-bottom: 1.2rem; }
-    .triage-rojo { background: #fef2f2 !important; border-left: 6px solid #dc2626 !important; color: #991b1b !important; padding: 1rem 1.3rem !important; border-radius: 12px !important; margin-bottom: 1.2rem !important; }
-    .triage-amarillo { background: #fffbeb !important; border-left: 6px solid #d97706 !important; color: #92400e !important; padding: 1rem 1.3rem !important; border-radius: 12px !important; margin-bottom: 1.2rem !important; }
-    .triage-verde { background: #f0fdf4 !important; border-left: 6px solid #16a34a !important; color: #166534 !important; padding: 1rem 1.3rem !important; border-radius: 12px !important; margin-bottom: 1.2rem !important; }
+    .triage-rojo { background: #fef2f2 !important; border-left: 6px solid #dc2626 !important; color: #991b1b !important; padding: 1rem 1.3rem !important; border-radius: 12px !important; margin-bottom: 1.2rem !important; box-shadow: 0 4px 12px rgba(220, 38, 38, 0.08); }
+    .triage-amarillo { background: #fffbeb !important; border-left: 6px solid #d97706 !important; color: #92400e !important; padding: 1rem 1.3rem !important; border-radius: 12px !important; margin-bottom: 1.2rem !important; box-shadow: 0 4px 12px rgba(217, 119, 6, 0.08); }
+    .triage-verde { background: #f0fdf4 !important; border-left: 6px solid #16a34a !important; color: #166534 !important; padding: 1rem 1.3rem !important; border-radius: 12px !important; margin-bottom: 1.2rem !important; box-shadow: 0 4px 12px rgba(22, 163, 74, 0.08); }
     .preview-container { border: 2px solid #e2e8f0; border-radius: 14px; background: #ffffff; padding: 8px; }
     .cencardio-card { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 20px; padding: 2.6rem 2.8rem; box-shadow: 0 20px 40px -12px rgba(10, 37, 64, 0.12); max-width: 480px; margin: 3rem auto; text-align: center; }
     </style>
@@ -83,7 +85,7 @@ def cargar_estilos_institucionales():
 st.markdown(cargar_estilos_institucionales(), unsafe_allow_html=True)
 
 # ==============================================================================
-# BASES DE DATOS (LOCAL Y SUPABASE)
+# BASE DE DATOS LOCAL INCONDICIONAL
 # ==============================================================================
 def init_db_local():
     conn = sqlite3.connect("historial_cencardio.db")
@@ -102,6 +104,28 @@ def init_db_local():
     conn.close()
 
 init_db_local()
+
+# ==============================================================================
+# CONECTOR DE NUBE PERSISTENTE: SUPABASE
+# ==============================================================================
+@st.cache_resource
+def obtener_cliente_supabase():
+    if not SUPABASE_LIB_OK: return None
+    url = st.secrets.get("SUPABASE_URL", os.environ.get("SUPABASE_URL", ""))
+    key = st.secrets.get("SUPABASE_KEY", os.environ.get("SUPABASE_KEY", ""))
+    if url and key:
+        try:
+            url_limpia = str(url).strip().rstrip("/")
+            for sub in ["/rest/v1", "/auth/v1", "/storage/v1"]:
+                if url_limpia.endswith(sub): url_limpia = url_limpia[:-len(sub)].rstrip("/")
+            cliente = create_client(url_limpia, str(key).strip().strip('"').strip("'"))
+            try: cliente.storage.create_bucket("estudios-pdf", options={"public": True})
+            except Exception: pass
+            return cliente
+        except Exception: return None
+    return None
+
+supabase = obtener_cliente_supabase()
 
 def guardar_estudio_servicio(nombre, modalidad, cups, parametro_clave, medico, texto, pdf_bytes, cod_verif):
     fecha_actual_str = ahora_colombia().strftime("%Y-%m-%d %H:%M:%S")
@@ -363,7 +387,7 @@ def generar_grafica_tacograma(d):
     return fig
 
 # ==============================================================================
-# MOTOR 1: EXTRACTOR DETERMINÍSTICO C++ (RESCATE ABSOLUTO DE MCP)
+# MOTOR 1: EXTRACTOR DETERMINÍSTICO C++ (REGLAS ESTRICTAS Y BLINDADAS)
 # ==============================================================================
 def limpiar_numero(val_str, tipo=int):
     if not val_str: return None
@@ -394,36 +418,20 @@ def extraer_m1_holter(texto):
     d["fc_min"]  = extraer_numero(r"M[íi]n[\s\|]*(\d{2,3})", txt_flat, int)
     d["fc_dia"]  = extraer_numero(r"D[íi]a.*?Prom\.\.?[\s\|]*(\d{2,3})", txt_flat, int)
     d["fc_noc"]  = extraer_numero(r"Noche.*?Prom\.\.?[\s\|]*(\d{2,3})", txt_flat, int)
-    
     d["pr_intervalo"] = extraer_numero(r"(?:Intervalo\s*PR|PR\s*Interval|PR\s*promedio|PR\s*medio)\s*[:\-\|]?\s*(\d{2,3})\b", txt_flat, int)
 
-    # ------------------------------------------------------------------------
-    # BLOQUE MCP BLINDADO: CERO FALSOS POSITIVOS. Búsqueda exhaustiva por fila.
-    d["mcp_latidos"] = None
-    d["mcp_porcentaje"] = None
+    # REGLA ESTRICTA DE MCP: SIN SALTOS CIEGOS
+    d["mcp_latidos"] = extraer_numero(r"(?:Marcapasos?|Estimulados?|Paced)\s*[:\|]?\s*([\d\.\,]+)\b(?!\s*%)", txt_flat, int)
     
-    mcp_lineas = re.findall(r"(?:Marcapasos?|Estimulados?|Paced|Latidos estimulados)[^\n\r]*", texto, re.IGNORECASE)
-    for linea in mcp_lineas:
-        pct = re.search(r'(\d+(?:\.\d+)?)\s*%', linea)
-        if pct: d["mcp_porcentaje"] = float(pct.group(1))
-        
-        # Buscar el conteo de latidos asumiendo que son los números grandes (ej > 100) en esa línea
-        lats = re.findall(r'\b(\d+)\b(?!\s*%)', linea.replace('.', '').replace(',', ''))
-        for l in lats:
-            val = int(l)
-            if val > 100: 
-                d["mcp_latidos"] = val
-                break
+    mcp_pct_match = re.search(r"(?:Marcapasos?|Estimulados?|Paced)\s*[:\|]?\s*([\d\.]+)\s*%", txt_flat, re.IGNORECASE)
+    if mcp_pct_match: 
+        d["mcp_porcentaje"] = float(mcp_pct_match.group(1))
+    else: 
+        pct_alt = re.search(r"Conteo[^\n]*\b([\d\.]+)\s*%", txt_flat, re.IGNORECASE)
+        if pct_alt: d["mcp_porcentaje"] = float(pct_alt.group(1))
+        else: d["mcp_porcentaje"] = None
 
-    if d["mcp_porcentaje"] is None:
-        mcp_pct_libre = re.search(r"(?:Marcapasos?|Estimulados?|Paced).{0,40}?(\d+(?:\.\d+)?)\s*%", txt_flat, re.IGNORECASE)
-        if mcp_pct_libre: d["mcp_porcentaje"] = float(mcp_pct_libre.group(1))
-
-    dx_text = texto[:2500].upper()
-    mcp_en_dx = bool(re.search(r'\b(MCP|MARCAPASO|MARCAPASOS|TRC|CDI|ESTIMULADO)\b', dx_text))
-
-    d["mcp_presente"] = bool((d["mcp_latidos"] and d["mcp_latidos"] > 0) or (d["mcp_porcentaje"] and d["mcp_porcentaje"] > 0) or mcp_en_dx)
-    # ------------------------------------------------------------------------
+    d["mcp_presente"] = bool((d.get("mcp_latidos") and d["mcp_latidos"] > 0) or (d.get("mcp_porcentaje") and d["mcp_porcentaje"] > 0))
 
     d["total_latidos"] = extraer_numero(r"(?:Total\s+de\s+latidos|Latidos\s+Totales|Total\s+Beats)[^\d]*([\d\.\,]+)", texto, int)
     if not d["total_latidos"]:
@@ -448,32 +456,31 @@ def extraer_m1_holter(texto):
     d["latidos_caidos"] = extraer_numero(r"Latidos? ca[íi]dos?[\s\|]*(\d+)", txt_flat, int)
     
     d["sdnn_24h"] = None
-    m_sdnn_line = re.search(r"Valor de 24 horas[^\n\r]*", txt_flat, re.IGNORECASE)
+    m_sdnn_line = re.search(r"Valor de 24 horas(.*?)(?:Todos los per[íi]odos|[\n\r])", txt_flat, re.IGNORECASE)
     if m_sdnn_line:
-        nums = re.findall(r'\b\d+(?:\.\d+)?\b', m_sdnn_line.group(0).replace(',', '.'))
-        if len(nums) >= 2: 
-            val_extracted = int(float(nums[1]))
-            d["sdnn_24h"] = val_extracted 
+        nums = re.findall(r'\b\d+(?:\.\d+)?\b', m_sdnn_line.group(1).replace(',', '.'))
+        if len(nums) >= 2: d["sdnn_24h"] = int(float(nums[1]))
     
     if d["sdnn_24h"] is None:
-        m_sdnn_gen = re.search(r"\bSDNN\b[^\d]*(\d{2,3})", txt_flat, re.IGNORECASE)
+        m_sdnn_gen = re.search(r"\bSDNN\b\s*[:\|]?\s*(\d{2,3})", txt_flat, re.IGNORECASE)
         if m_sdnn_gen: d["sdnn_24h"] = int(m_sdnn_gen.group(1))
 
     d["qtc_prom"] = None
-    m_qtc_line = re.search(r"Todos los per[íi]odos[^\n\r]*", txt_flat, re.IGNORECASE)
+    m_qtc_line = re.search(r"Todos los per[íi]odos(.*?)(?:[\n\r]|$)", txt_flat, re.IGNORECASE)
     if m_qtc_line:
-        nums = re.findall(r'\b\d+(?:\.\d+)?\b', m_qtc_line.group(0).replace(',', '.'))
+        nums = re.findall(r'\b\d+(?:\.\d+)?\b', m_qtc_line.group(1).replace(',', '.'))
         if len(nums) >= 3: 
             val_qtc = int(float(nums[2]))
             d["qtc_prom"] = val_qtc if val_qtc > 0 else None
             
     if d["qtc_prom"] is None:
-        m_qtc_gen = re.search(r"\bQTc\b[^\d]*(\d{3})", txt_flat, re.IGNORECASE)
+        m_qtc_gen = re.search(r"\bQTc\b\s*[:\|]?\s*(\d{3})", txt_flat, re.IGNORECASE)
         if m_qtc_gen: d["qtc_prom"] = int(m_qtc_gen.group(1))
 
     d["st_dep_episodios"] = extraer_numero(r"Depresi[óo]n ST[\s\|]*(\d+)", txt_flat, int)
     d["st_elev_episodios"] = extraer_numero(r"Elevaci[óo]n ST[\s\|]*(\d+)", txt_flat, int)
     
+    dx_text = texto[:2000].upper()
     bloqueo_keys = ["BLOQUEO DE RAMA", "BRD", "BRI", "BCRD", "BCRI", "QRS ANCHO", "CONDUCCION INTRAVENTRICULAR"]
     d["tiene_bloqueo_rama"] = any(k in dx_text for k in bloqueo_keys)
     return d
@@ -619,7 +626,7 @@ def auditar_motor_3_universal(m1, m2, modalidad):
         mcp_pct_m2 = m2.get("mcp_porcentaje") if m2 else None
         d_f["mcp_porcentaje"], _ = arbitrar_valor("mcp_porcentaje", mcp_pct_m1, mcp_pct_m2, float, "baja")
         
-        # CANDADO MCP CON LA IA
+        # CANDADO DE MARCAPASOS REVISADO
         d_f["mcp_presente"] = bool(m1.get("mcp_presente") or (m2 and m2.get("mcp_presente")) or (d_f.get("mcp_porcentaje") and d_f["mcp_porcentaje"] > 0) or (d_f.get("mcp_latidos") and d_f["mcp_latidos"] > 0))
         
         t_bloq = m1.get("tiene_bloqueo_rama", False) or (m2.get("tiene_bloqueo_rama", False) if m2 else False)
@@ -690,22 +697,22 @@ def ejecutar_triple_engine_universal(pdf_bytes, modalidad="HOLTER"):
     doc.close()
 
     if modalidad == "HOLTER":
-        prompt_ia = f"""Eres el Jefe de Electrofisiología Clínica (Guías AHA/ESC/HRS). Tienes la obligación de realizar una auditoría médica exhaustiva de este estudio Holter de 24 horas ({total_pags} páginas).
+        prompt_ia = f"""Eres el Jefe de Electrofisiología Clínica. Realiza una auditoría médica exhaustiva de este estudio Holter de 24 horas ({total_pags} páginas).
 
 INSTRUCCIONES DE AUDITORÍA CLÍNICA PROFUNDA:
-1. FRECUENCIA Y RITMO: Rastrea la FC Promedio, Día, Noche, Máxima y Mínima. Evalúa presencia de marcapasos (MCP), % de estimulación y latidos totales.
-   -> ALERTA MÁXIMA MARCAPASOS: Si en el resumen, en las tablas o en el diagnóstico ves "Latidos estimulados", "Marcapaso", "MCP", "Paced", DEBES poner "mcp_presente": true y extraer los latidos o porcentaje. Jamás asumas false si hay evidencia.
-2. EVENTOS CRONOTRÓPICOS: Contabiliza episodios exactos de Taquicardia y Bradicardia, con sus frecuencias máximas y mínimas.
+1. FRECUENCIA Y RITMO: Rastrea la FC Promedio, Día, Noche, Máxima y Mínima.
+   -> IMPORTANTE (MARCAPASOS): El valor "mcp_presente" DEBE SER FALSE a menos que extraigas explícitamente un número mayor a 0 en latidos o porcentaje de estimulación.
+2. EVENTOS CRONOTRÓPICOS: Contabiliza episodios de Taquicardia y Bradicardia.
 3. INTERVALOS: Evalúa el QTc promedio y el intervalo PR (milisegundos). 
 4. ISQUEMIA (ST): Detecta episodios de infradesnivel o supradesnivel del segmento ST.
 5. CONDUCCIÓN AV: Identifica latidos caídos o bloqueos AV.
-6. CONDUCCIÓN INTRAVENTRICULAR: Busca bloqueos de rama (BRI/BRD) o complejos anchos. Si MCP > 50%, asume morfología de bloqueo.
-7. ECTOPIAS Y ARRITMIAS: Extrae conteo exacto de EV (Ventriculares), ESV (Supraventriculares), Duplas, Rachas o Salvas de TSV y TV, y patrones de Bigeminismo o Trigeminismo.
-8. SÍNTOMAS: Revisa si hay eventos marcados por el paciente.
-9. VARIABILIDAD (HRV/SDNN): Busca el SDNN real en ms. REGLA DE ORO: Si ves tablas de variabilidad o QT llenas de '0' por todo lado, es porque el equipo no lo calculó (artefacto técnico). En ese caso devuelve 'null'. 
+6. CONDUCCIÓN INTRAVENTRICULAR: Busca bloqueos de rama (BRI/BRD) o complejos anchos.
+7. ECTOPIAS Y ARRITMIAS: Extrae conteo de EV, ESV, Duplas, Salvas de TSV/TV, Bigeminismo o Trigeminismo.
+8. SÍNTOMAS: Eventos marcados por el paciente.
+9. VARIABILIDAD (HRV/SDNN): Busca el SDNN real en ms. Devuelve 'null' si la tabla de variabilidad tiene puros ceros.
 10. PAUSAS: Detecta pausas significativas y su duración máxima (pausa_max_seg).
 
-Devuelve ÚNICAMENTE un objeto JSON estricto. Usa 'null' explícito (sin comillas) si el dato NO está escrito o es una tabla vacía/llena de ceros falsos. NO asumas ni inventes.
+Devuelve ÚNICAMENTE un objeto JSON estricto. Usa 'null' explícito si el dato NO está escrito o es una tabla vacía. NO asumas.
 {{"paciente": "str", "cedula": "str", "mcp_presente": bool, "mcp_latidos": int, "mcp_porcentaje": float, "fc_prom": int, "fc_dia": int, "fc_noc": int, "fc_max": int, "fc_min": int, "total_latidos": int, "latidos_normales": int, "pausas": int, "rr_max_seg": float, "pausa_max_seg": float, "ev_total": int, "tv_episodios": int, "ev_duplas": int, "esv_total": int, "tsv_episodios": int, "sdnn_24h": int, "qtc_prom": int, "pr_intervalo": int, "st_dep_episodios": int, "st_elev_episodios": int, "eventos_paciente": int, "tiene_bloqueo_rama": bool, "taqui_conteo": int, "bradi_conteo": int, "taqui_fc_max": int, "bradi_fc_min": int, "latidos_caidos": int, "bigeminismo": int, "trigeminismo": int}}"""
     elif modalidad == "MAPA":
         prompt_ia = f"""Eres Auditor Médico Jefe. Analiza las {total_pags} imágenes y el texto de este MAPA.
@@ -790,6 +797,7 @@ def redactar_informe_holter_11_puntos(d, perfil):
     elif d.get("tiene_bloqueo_rama"): p6 = f"6. Alteración de conducción intraventricular por {d.get('bloqueo_detalle', 'bloqueo de rama')}."
     else: p6 = "6. Sin alteración en la conducción intraventricular."
 
+    # LÓGICA DE CARGA BLINDADA (FÓRMULA SEGURA)
     tot_q = d.get("total_latidos")
     if not tot_q or tot_q <= 1:
         if fc_p and fc_p > 0: tot_q = fc_p * 1440
@@ -1192,7 +1200,7 @@ def generar_excel_avanzado_produccion(df_base):
     return output.getvalue(), "xlsx"
 
 # ==============================================================================
-# UI PRINCIPAL: BARRERA DE LOGIN Y NAVEGACIÓN
+# UI PRINCIPAL Y LOGIN
 # ==============================================================================
 LISTA_ESPECIALISTAS = [
     {"id": "dr.amaya", "etiqueta": "Dr. William Amaya Ramirez", "clave": "Cardio2025*", "nombre_completo": "DR. WILLIAM AMAYA RAMIREZ", "especialidad": "INTERNISTA - CARDIÓLOGO", "registro": "RM 79.502.624 SDS"},
@@ -1230,7 +1238,7 @@ if not st.session_state.autenticado:
                 if m["clave"] == pwd:
                     st.session_state.autenticado = True; st.session_state.usuario_actual = m["id"]
                     st.rerun()
-                else: st.error("❌ Contraseña incorrecta.")
+                else: st.error("❌ Contraseña incorrecta para el especialista seleccionado.")
         st.markdown('</div>', unsafe_allow_html=True)
     st.stop()
 
@@ -1253,7 +1261,7 @@ with st.sidebar:
         st.session_state.autenticado = False
         st.rerun()
 
-st.markdown(f'<div class="top-hospital-bar"><div><div style="font-size:1.35rem; font-weight:800; color:#0a2540;">CENCARDIO WORKSTATION</div><div style="font-size:0.82rem; font-weight:700; color:#c8102e;">Alta Complejidad</div></div><div style="display:flex; gap:8px;"><span class="inst-badge-success">{"Nube Supabase" if supabase else "Local SQLite"}</span><span class="inst-badge-primary">Triple Engine 100% Auditado</span></div></div>', unsafe_allow_html=True)
+st.markdown(f'<div class="top-hospital-bar"><div><div style="font-size:1.35rem; font-weight:800; color:#0a2540;">CENCARDIO WORKSTATION</div><div style="font-size:0.82rem; font-weight:700; color:#c8102e;">Alta Complejidad</div></div><div style="display:flex; gap:8px;"><span class="inst-badge-success">{"Nube Supabase" if supabase else "Local SQLite"}</span><span class="inst-badge-primary">Triple Engine Enterprise Auditado</span></div></div>', unsafe_allow_html=True)
 
 tab_procesar, tab_historial = st.tabs(["📥 Procesamiento del Estudio", "📁 Archivo Clínico & Reportes"])
 
@@ -1366,7 +1374,7 @@ with tab_procesar:
         if up_file:
             b_pdf = up_file.getvalue()
             if st.session_state.get("last_file") != up_file.name:
-                with st.spinner("🚀 Ejecutando TRIPLE ENGINE (Extracción y Auditoría Clínica Completa)..."):
+                with st.spinner("🚀 Ejecutando TRIPLE ENGINE (Extracción 100% Auditada y Blindada)..."):
                     mod = "HOLTER" if "Holter" in mod_sel else "MAPA"
                     d_final = ejecutar_triple_engine_universal(b_pdf, mod)
                     st.session_state.d_final = d_final
