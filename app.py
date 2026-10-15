@@ -24,7 +24,6 @@ TZ_COLOMBIA = timezone(timedelta(hours=-5))
 def ahora_colombia():
     return datetime.now(TZ_COLOMBIA)
 
-# Importación segura de openpyxl (Excel Avanzado)
 try:
     import openpyxl
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -33,7 +32,6 @@ try:
 except ImportError:
     OPENPYXL_INSTALADO = False
 
-# Importación segura de Supabase (Nube)
 try:
     from supabase import create_client, Client
     SUPABASE_LIB_OK = True
@@ -41,14 +39,14 @@ except ImportError:
     SUPABASE_LIB_OK = False
 
 st.set_page_config(
-    page_title="Centro Cardiovascular Colombiano CENCARDIO · Workstation Enterprise",
+    page_title="Centro Cardiovascular Colombiano CENCARDIO · Workstation",
     page_icon="🫀",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
 # ==============================================================================
-# GESTIÓN DE LOGOTIPO INSTITUCIONAL Y ESTILOS UI
+# ESTILOS E INTERFAZ INSTITUCIONAL
 # ==============================================================================
 @st.cache_data
 def obtener_logo_b64():
@@ -75,9 +73,9 @@ def cargar_estilos_institucionales():
     .stTabs [data-baseweb="tab"] { border-radius: 8px !important; padding: 9px 22px !important; font-weight: 700 !important; font-size: 0.88rem !important; color: #64748b !important; }
     .stTabs [aria-selected="true"] { background-color: #0a2540 !important; color: #ffffff !important; }
     .specialist-card { background: linear-gradient(135deg, #0a2540 0%, #133863 100%); border-radius: 14px; padding: 1.1rem; color: #ffffff; margin-bottom: 1.2rem; }
-    .triage-rojo { background: #fef2f2 !important; border-left: 6px solid #dc2626 !important; color: #991b1b !important; padding: 1rem 1.3rem !important; border-radius: 12px !important; margin-bottom: 1.2rem !important; box-shadow: 0 4px 12px rgba(220, 38, 38, 0.08); }
-    .triage-amarillo { background: #fffbeb !important; border-left: 6px solid #d97706 !important; color: #92400e !important; padding: 1rem 1.3rem !important; border-radius: 12px !important; margin-bottom: 1.2rem !important; box-shadow: 0 4px 12px rgba(217, 119, 6, 0.08); }
-    .triage-verde { background: #f0fdf4 !important; border-left: 6px solid #16a34a !important; color: #166534 !important; padding: 1rem 1.3rem !important; border-radius: 12px !important; margin-bottom: 1.2rem !important; box-shadow: 0 4px 12px rgba(22, 163, 74, 0.08); }
+    .triage-rojo { background: #fef2f2 !important; border-left: 6px solid #dc2626 !important; color: #991b1b !important; padding: 1rem 1.3rem !important; border-radius: 12px !important; margin-bottom: 1.2rem !important; }
+    .triage-amarillo { background: #fffbeb !important; border-left: 6px solid #d97706 !important; color: #92400e !important; padding: 1rem 1.3rem !important; border-radius: 12px !important; margin-bottom: 1.2rem !important; }
+    .triage-verde { background: #f0fdf4 !important; border-left: 6px solid #16a34a !important; color: #166534 !important; padding: 1rem 1.3rem !important; border-radius: 12px !important; margin-bottom: 1.2rem !important; }
     .preview-container { border: 2px solid #e2e8f0; border-radius: 14px; background: #ffffff; padding: 8px; }
     .cencardio-card { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 20px; padding: 2.6rem 2.8rem; box-shadow: 0 20px 40px -12px rgba(10, 37, 64, 0.12); max-width: 480px; margin: 3rem auto; text-align: center; }
     </style>
@@ -85,7 +83,7 @@ def cargar_estilos_institucionales():
 st.markdown(cargar_estilos_institucionales(), unsafe_allow_html=True)
 
 # ==============================================================================
-# BASE DE DATOS LOCAL INCONDICIONAL
+# BASES DE DATOS (LOCAL Y SUPABASE)
 # ==============================================================================
 def init_db_local():
     conn = sqlite3.connect("historial_cencardio.db")
@@ -105,9 +103,6 @@ def init_db_local():
 
 init_db_local()
 
-# ==============================================================================
-# CONECTOR DE NUBE PERSISTENTE: SUPABASE
-# ==============================================================================
 @st.cache_resource
 def obtener_cliente_supabase():
     if not SUPABASE_LIB_OK: return None
@@ -199,6 +194,22 @@ def eliminar_estudio_servicio(estudio_id):
     conn.commit()
     conn.close()
 
+def buscar_telefono_servicio(cedula):
+    if not cedula: return ""
+    ced_limpia = re.sub(r'\D', '', str(cedula))
+    if supabase:
+        try:
+            res = supabase.table("dinamica_pacientes").select("telefono").eq("cedula", ced_limpia).execute()
+            if res.data: return res.data[0]["telefono"]
+        except Exception: pass
+    init_db_local()
+    conn = sqlite3.connect("historial_cencardio.db")
+    c = conn.cursor()
+    c.execute("SELECT telefono FROM dinamica_pacientes WHERE cedula = ?", (ced_limpia,))
+    res = c.fetchone()
+    conn.close()
+    return res[0] if res else ""
+
 def sincronizar_directorio_servicio(df):
     col_ced = next((col for col in df.columns if any(k in col.lower() for k in ["cedula", "documento", "identificacion", "id"])), None)
     col_tel = next((col for col in df.columns if any(k in col.lower() for k in ["telefono", "celular", "tel", "movil"])), None)
@@ -227,23 +238,7 @@ def sincronizar_directorio_servicio(df):
                   (item["cedula"], item["nombre"], item["telefono"], item["fecha_actualizacion"]))
     conn.commit()
     conn.close()
-    return True, f"Se sincronizaron con éxito {registros} pacientes."
-
-def buscar_telefono_servicio(cedula):
-    if not cedula: return ""
-    ced_limpia = re.sub(r'\D', '', str(cedula))
-    if supabase:
-        try:
-            res = supabase.table("dinamica_pacientes").select("telefono").eq("cedula", ced_limpia).execute()
-            if res.data: return res.data[0]["telefono"]
-        except Exception: pass
-    init_db_local()
-    conn = sqlite3.connect("historial_cencardio.db")
-    c = conn.cursor()
-    c.execute("SELECT telefono FROM dinamica_pacientes WHERE cedula = ?", (ced_limpia,))
-    res = c.fetchone()
-    conn.close()
-    return res[0] if res else ""
+    return True, f"Se sincronizaron {registros} pacientes."
 
 # ==============================================================================
 # AUDITORÍA CLÍNICA (SANITY CHECKS)
@@ -387,7 +382,7 @@ def generar_grafica_tacograma(d):
     return fig
 
 # ==============================================================================
-# MOTOR 1: EXTRACTOR DETERMINÍSTICO C++ (BÚSQUEDA EXHAUSTIVA DE COLUMNAS)
+# MOTOR 1: EXTRACTOR DETERMINÍSTICO C++ (REGLAS ESTRICTAS)
 # ==============================================================================
 def limpiar_numero(val_str, tipo=int):
     if not val_str: return None
@@ -409,7 +404,6 @@ def extraer_m1_holter(texto):
     
     m_nom = re.search(r"([A-ZÁÉÍÓÚÑ\s]{3,50},\s*[A-ZÁÉÍÓÚÑ\s]{3,50})[\s\n]+(?:No confirmado|Confirmado|Reconfirmado)?[\s\n]*Informe", texto)
     d["paciente"] = m_nom.group(1).replace("\n", " ").strip() if m_nom else None
-    
     m_id = re.search(r"(?:ID\s*Paciente|ID|C\.?C\.?|Doc\.?|Historia)\s*[:\.]?\s*(\d{5,12})", texto, re.IGNORECASE)
     d["cedula"] = m_id.group(1) if m_id else None
 
@@ -418,32 +412,25 @@ def extraer_m1_holter(texto):
     d["fc_min"]  = extraer_numero(r"M[íi]n[\s\|]*(\d{2,3})", txt_flat, int)
     d["fc_dia"]  = extraer_numero(r"D[íi]a.*?Prom\.\.?[\s\|]*(\d{2,3})", txt_flat, int)
     d["fc_noc"]  = extraer_numero(r"Noche.*?Prom\.\.?[\s\|]*(\d{2,3})", txt_flat, int)
-    
     d["pr_intervalo"] = extraer_numero(r"(?:Intervalo\s*PR|PR\s*Interval|PR\s*promedio|PR\s*medio)\s*[:\-\|]?\s*(\d{2,3})\b", txt_flat, int)
 
-    # REPARACIÓN CRÍTICA: Búsqueda múltiple de Marcapasos para no fallar jamás
-    # Busca latidos primero
-    d["mcp_latidos"] = extraer_numero(r"(?:Marcapaso|Marcapasos|Estimulados|Paced)[^\d]*([\d\.\,]+)\b(?!\s*%)", texto, int)
+    # ------------------------------------------------------------------------
+    # BLOQUE MCP BLINDADO: CERO FALSOS POSITIVOS
+    # Se exige que el número esté PEGADO a la palabra, saltando "ruido".
+    d["mcp_latidos"] = extraer_numero(r"(?:Marcapasos?|Estimulados?|Paced)\s*[:\|]?\s*([\d\.\,]+)\b(?!\s*%)", txt_flat, int)
     
-    # Busca porcentaje de marcapasos saltando tablas rotas o textos largos
-    mcp_pct_match = re.search(r"(?:Marcapaso|Marcapasos|Estimulados|Paced)[^\d]*([\d\.]+)\s*%", txt_flat, re.IGNORECASE)
+    mcp_pct_match = re.search(r"(?:Marcapasos?|Estimulados?|Paced)\s*[:\|]?\s*([\d\.]+)\s*%", txt_flat, re.IGNORECASE)
     if mcp_pct_match: 
         d["mcp_porcentaje"] = float(mcp_pct_match.group(1))
     else: 
-        # Plan B para porcentaje: Buscar en la tabla de Resumen de Conteo
         pct_alt = re.search(r"Conteo[^\n]*\b([\d\.]+)\s*%", txt_flat, re.IGNORECASE)
         if pct_alt: d["mcp_porcentaje"] = float(pct_alt.group(1))
         else: d["mcp_porcentaje"] = None
 
-    dx_text = texto[:2000].upper()
-    mcp_en_dx = bool(re.search(r'(?:DX|DIAGN[ÓO]STICO|INDICACI[ÓO]N|COMENTARIOS).*?\b(MCP|MARCAPASO|MARCAPASOS|TRC|CDI)\b', dx_text))
-    
-    # Diagnóstico booleano definitivo de MCP
-    d["mcp_presente"] = True if ((d.get("mcp_latidos") and d["mcp_latidos"] > 0) or (d.get("mcp_porcentaje") and d["mcp_porcentaje"] > 0) or mcp_en_dx) else False
+    d["mcp_presente"] = bool((d.get("mcp_latidos") and d["mcp_latidos"] > 0) or (d.get("mcp_porcentaje") and d["mcp_porcentaje"] > 0))
+    # ------------------------------------------------------------------------
 
-    # REPARACIÓN CRÍTICA: Total de latidos más robusto para no dividir por 1 y sacar 5700%
     d["total_latidos"] = extraer_numero(r"(?:Total\s+de\s+latidos|Latidos\s+Totales|Total\s+Beats)[^\d]*([\d\.\,]+)", texto, int)
-    # Plan B: buscar el número más grande en la sección de Conteo
     if not d["total_latidos"]:
         conteo_line = re.search(r"Conteo[^\d]*([\d\.\,]+)", texto, re.IGNORECASE)
         if conteo_line: d["total_latidos"] = limpiar_numero(conteo_line.group(1), int)
@@ -465,34 +452,33 @@ def extraer_m1_holter(texto):
     d["trigeminismo"] = extraer_numero(r"Trigeminismo[\s\|]*(\d+)", txt_flat, int)
     d["latidos_caidos"] = extraer_numero(r"Latidos? ca[íi]dos?[\s\|]*(\d+)", txt_flat, int)
     
-    # EXTRACCIÓN AVANZADA SDNN Y QTC: Aislando la fila
+    # EXTRACCIÓN AVANZADA SDNN Y QTC: Aísla la fila de la matriz para no cruzar ceros
     d["sdnn_24h"] = None
-    m_sdnn_line = re.search(r"Valor de 24 horas[^\n\r]*", txt_flat, re.IGNORECASE)
+    m_sdnn_line = re.search(r"Valor de 24 horas(.*?)(?:Todos los per[íi]odos|[\n\r])", txt_flat, re.IGNORECASE)
     if m_sdnn_line:
-        nums = re.findall(r'\b\d+(?:\.\d+)?\b', m_sdnn_line.group(0).replace(',', '.'))
-        if len(nums) >= 2: 
-            val_extracted = int(float(nums[1]))
-            d["sdnn_24h"] = val_extracted 
+        nums = re.findall(r'\b\d+(?:\.\d+)?\b', m_sdnn_line.group(1).replace(',', '.'))
+        if len(nums) >= 2: d["sdnn_24h"] = int(float(nums[1]))
     
     if d["sdnn_24h"] is None:
-        m_sdnn_gen = re.search(r"\bSDNN\b[^\d]*(\d{2,3})", txt_flat, re.IGNORECASE)
+        m_sdnn_gen = re.search(r"\bSDNN\b\s*[:\|]?\s*(\d{2,3})", txt_flat, re.IGNORECASE)
         if m_sdnn_gen: d["sdnn_24h"] = int(m_sdnn_gen.group(1))
 
     d["qtc_prom"] = None
-    m_qtc_line = re.search(r"Todos los per[íi]odos[^\n\r]*", txt_flat, re.IGNORECASE)
+    m_qtc_line = re.search(r"Todos los per[íi]odos(.*?)(?:[\n\r]|$)", txt_flat, re.IGNORECASE)
     if m_qtc_line:
-        nums = re.findall(r'\b\d+(?:\.\d+)?\b', m_qtc_line.group(0).replace(',', '.'))
+        nums = re.findall(r'\b\d+(?:\.\d+)?\b', m_qtc_line.group(1).replace(',', '.'))
         if len(nums) >= 3: 
             val_qtc = int(float(nums[2]))
             d["qtc_prom"] = val_qtc if val_qtc > 0 else None
             
     if d["qtc_prom"] is None:
-        m_qtc_gen = re.search(r"\bQTc\b[^\d]*(\d{3})", txt_flat, re.IGNORECASE)
+        m_qtc_gen = re.search(r"\bQTc\b\s*[:\|]?\s*(\d{3})", txt_flat, re.IGNORECASE)
         if m_qtc_gen: d["qtc_prom"] = int(m_qtc_gen.group(1))
 
     d["st_dep_episodios"] = extraer_numero(r"Depresi[óo]n ST[\s\|]*(\d+)", txt_flat, int)
     d["st_elev_episodios"] = extraer_numero(r"Elevaci[óo]n ST[\s\|]*(\d+)", txt_flat, int)
     
+    dx_text = texto[:2000].upper()
     bloqueo_keys = ["BLOQUEO DE RAMA", "BRD", "BRI", "BCRD", "BCRI", "QRS ANCHO", "CONDUCCION INTRAVENTRICULAR"]
     d["tiene_bloqueo_rama"] = any(k in dx_text for k in bloqueo_keys)
     return d
@@ -629,20 +615,7 @@ def auditar_motor_3_universal(m1, m2, modalidad):
         norm_m2 = m2.get("latidos_normales") if m2 else None
         norm, _ = arbitrar_valor("latidos_normales", norm_m1, norm_m2, int, "baja")
         
-        if d_f.get("total_latidos") is not None:
-            norm_val = norm or 0
-            ev_t = d_f.get("ev_total") or 0
-            esv_t = d_f.get("esv_total") or 0
-            mcp_l = d_f.get("mcp_latidos") or 0
-            
-            suma = norm_val + ev_t + esv_t + mcp_l
-            if d_f["total_latidos"] > 0 and abs(suma - d_f["total_latidos"]) > (d_f["total_latidos"] * 0.05):
-                notas.append(f"⚖️ CONSERVACIÓN: Suma ({suma}) no cuadra con Total ({d_f['total_latidos']}). Ajustando Total.")
-                d_f["total_latidos"] = max(d_f["total_latidos"], suma)
-                d_f["latidos_normales"] = norm_val
-            else:
-                d_f["latidos_normales"] = norm_val if norm_val > 0 else max(0, d_f["total_latidos"] - ev_t - esv_t - mcp_l)
-
+        # CANDADO PAUSAS (Incongruencia Fisiológica)
         if d_f.get("rr_max_seg") is not None and d_f.get("pausas") is not None:
             if d_f["rr_max_seg"] > 0 and d_f["rr_max_seg"] < 2.0 and d_f["pausas"] > 0:
                 notas.append(f"🔒 VETO FISIOLÓGICO: RR Máx es {d_f['rr_max_seg']}s. Imposible pausas > 2.0s. Se vetan pausas.")
@@ -652,7 +625,7 @@ def auditar_motor_3_universal(m1, m2, modalidad):
         mcp_pct_m2 = m2.get("mcp_porcentaje") if m2 else None
         d_f["mcp_porcentaje"], _ = arbitrar_valor("mcp_porcentaje", mcp_pct_m1, mcp_pct_m2, float, "baja")
         
-        # EL CANDADO DEFINITIVO DEL MARCAPASOS
+        # CANDADO MCP
         d_f["mcp_presente"] = bool(m1.get("mcp_presente") or (m2 and m2.get("mcp_presente")) or (d_f.get("mcp_porcentaje") and d_f["mcp_porcentaje"] > 0) or (d_f.get("mcp_latidos") and d_f["mcp_latidos"] > 0))
         
         t_bloq = m1.get("tiene_bloqueo_rama", False) or (m2.get("tiene_bloqueo_rama", False) if m2 else False)
@@ -727,6 +700,7 @@ def ejecutar_triple_engine_universal(pdf_bytes, modalidad="HOLTER"):
 
 INSTRUCCIONES DE AUDITORÍA CLÍNICA PROFUNDA:
 1. FRECUENCIA Y RITMO: Rastrea la FC Promedio, Día, Noche, Máxima y Mínima. Evalúa presencia de marcapasos (MCP), % de estimulación y latidos totales.
+   -> IMPORTANTE: "mcp_presente" DEBE SER false a menos que el paciente tenga latidos de marcapasos explícitamente > 0 o porcentaje > 0.
 2. EVENTOS CRONOTRÓPICOS: Contabiliza episodios exactos de Taquicardia y Bradicardia, con sus frecuencias máximas y mínimas.
 3. INTERVALOS: Evalúa el QTc promedio y el intervalo PR (milisegundos). 
 4. ISQUEMIA (ST): Detecta episodios de infradesnivel o supradesnivel del segmento ST.
@@ -779,7 +753,6 @@ def redactar_informe_holter_11_puntos(d, perfil):
     pausas = d.get("pausas") or 0
     txt_sensado = " con adecuado sensado y captura" if pausas == 0 else ""
     
-    # LA REDACCIÓN ESTÁCTICA DEL MARCAPASOS REPARADA
     if d.get("mcp_presente") and pct_mcp >= 80.0: 
         p1 = f"1. Ritmo comandado por marcapasos definitivo (electroestimulado/sensado en {pct_mcp:.1f}%){txt_sensado} con FC promedio {fc_p_str} lpm{dip_txt}."
     elif d.get("mcp_presente"): 
@@ -823,13 +796,11 @@ def redactar_informe_holter_11_puntos(d, perfil):
     elif d.get("tiene_bloqueo_rama"): p6 = f"6. Alteración de conducción intraventricular por {d.get('bloqueo_detalle', 'bloqueo de rama')}."
     else: p6 = "6. Sin alteración en la conducción intraventricular."
 
-    # LÓGICA DE CARGA REPARADA (Para no dar 5700%)
+    # ALGORITMO SEGURO DE CARGA ECTÓPICA (Evita el error de división por 1 dando 5700%)
     tot_q = d.get("total_latidos")
-    if not tot_q or tot_q <= 1: 
-        # Si el equipo no arrojó el total de latidos (imposible biológicamente), hacemos una aproximación matemática base 
-        # (FC promedio * 60 * 24) para no dañar el porcentaje.
-        if fc_p and fc_p > 0: tot_q = fc_p * 60 * 24
-        else: tot_q = 86400 # Promedio estándar humano para evitar división por 1
+    if not tot_q or tot_q <= 1:
+        if fc_p and fc_p > 0: tot_q = fc_p * 1440
+        else: tot_q = 86400
         
     ev = d.get("ev_total") or 0
     carga = (ev / tot_q) * 100 if tot_q > 0 else 0
@@ -868,6 +839,7 @@ def redactar_informe_holter_11_puntos(d, perfil):
     if ev_pac is not None and ev_pac > 0: p8 = f"8. Diario paciente: {ev_pac} eventos marcados."
     else: p8 = "8. No refirió síntomas."
 
+    # LÓGICA DE SDNN BLINDADA
     sdnn = d.get("sdnn_24h")
     mod_mcp = " (Modificada por estimulación de marcapasos)." if d.get("mcp_presente") else ""
     
@@ -1289,11 +1261,11 @@ with st.sidebar:
         st.session_state.autenticado = False
         st.rerun()
 
-st.markdown(f'<div class="top-hospital-bar"><div><div style="font-size:1.35rem; font-weight:800; color:#0a2540;">CENCARDIO WORKSTATION</div><div style="font-size:0.82rem; font-weight:700; color:#c8102e;">Alta Complejidad</div></div><div style="display:flex; gap:8px;"><span class="inst-badge-success">{"Nube Supabase" if supabase else "Local SQLite"}</span><span class="inst-badge-primary">Triple Engine 100% Auditado</span></div></div>', unsafe_allow_html=True)
+st.markdown(f'<div class="top-hospital-bar"><div><div style="font-size:1.35rem; font-weight:800; color:#0a2540;">CENCARDIO WORKSTATION</div><div style="font-size:0.82rem; font-weight:700; color:#c8102e;">Alta Complejidad</div></div><div style="display:flex; gap:8px;"><span class="inst-badge-success">{"Nube Supabase" if supabase else "Local SQLite"}</span><span class="inst-badge-primary">Triple Engine Enterprise</span></div></div>', unsafe_allow_html=True)
 
 tab_procesar, tab_historial = st.tabs(["📥 Procesamiento del Estudio", "📁 Archivo Clínico & Reportes"])
 
-# LLAVES DINÁMICAS PARA LIMPIEZA DE UPLOADER Y CACHÉ
+# LLAVES DINÁMICAS PARA LIMPIEZA TOTAL DE MEMORIA CACHÉ
 if "up_key_esf" not in st.session_state: st.session_state.up_key_esf = str(uuid.uuid4())
 if "up_key_hm" not in st.session_state: st.session_state.up_key_hm = str(uuid.uuid4())
 
@@ -1332,6 +1304,7 @@ with tab_procesar:
                 for k in list(st.session_state.keys()):
                     if k not in ["autenticado", "usuario_actual", "up_key_esf", "up_key_hm"]:
                         del st.session_state[k]
+                st.cache_data.clear()
                 st.rerun()
 
         elif fotos_esfuerzo and st.button("⚡ EXTRAER FOTOS CON VISIÓN IA", type="primary", use_container_width=True):
@@ -1401,7 +1374,7 @@ with tab_procesar:
         if up_file:
             b_pdf = up_file.getvalue()
             if st.session_state.get("last_file") != up_file.name:
-                with st.spinner("🚀 Ejecutando TRIPLE ENGINE (Extracción 100% Auditada y Sin Suposiciones)..."):
+                with st.spinner("🚀 Ejecutando TRIPLE ENGINE (Extracción y Auditoría Clínica Completa)..."):
                     mod = "HOLTER" if "Holter" in mod_sel else "MAPA"
                     d_final = ejecutar_triple_engine_universal(b_pdf, mod)
                     st.session_state.d_final = d_final
@@ -1416,6 +1389,7 @@ with tab_procesar:
                 for k in list(st.session_state.keys()):
                     if k not in ["autenticado", "usuario_actual", "up_key_esf", "up_key_hm"]:
                         del st.session_state[k]
+                st.cache_data.clear()
                 st.rerun()
 
             d = st.session_state.d_final
