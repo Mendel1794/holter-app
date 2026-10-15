@@ -421,20 +421,36 @@ def extraer_m1_holter(texto):
     
     d["pr_intervalo"] = extraer_numero(r"(?:Intervalo\s*PR|PR\s*Interval|PR\s*promedio|PR\s*medio)\s*[:\-\|]?\s*(\d{2,3})\b", txt_flat, int)
 
-    d["total_latidos"] = extraer_numero(r"Total\s+de\s+latidos\s*[:\.]?\s*([\d\.\,]+)", texto, int)
-    d["ev_total"]      = extraer_numero(r"Latidos ventriculares\s*[:\|]?\s*([\d\.\,]+)", texto, int)
-    d["esv_total"]     = extraer_numero(r"Latidos supraventriculares\s*[:\|]?\s*([\d\.\,]+)", texto, int)
-    d["mcp_latidos"]   = extraer_numero(r"Marcapaso\s*[:\|]?\s*([\d\.\,]+)", texto, int)
+    # REPARACIÓN CRÍTICA: Búsqueda múltiple de Marcapasos para no fallar jamás
+    # Busca latidos primero
+    d["mcp_latidos"] = extraer_numero(r"(?:Marcapaso|Marcapasos|Estimulados|Paced)[^\d]*([\d\.\,]+)\b(?!\s*%)", texto, int)
     
-    mcp_pct_match = re.search(r"Marcapaso[^\d]*([\d\.]+)\s*%", txt_flat, re.IGNORECASE)
-    if mcp_pct_match: d["mcp_porcentaje"] = float(mcp_pct_match.group(1))
-    else: d["mcp_porcentaje"] = None
-        
-    d["latidos_normales"] = None
+    # Busca porcentaje de marcapasos saltando tablas rotas o textos largos
+    mcp_pct_match = re.search(r"(?:Marcapaso|Marcapasos|Estimulados|Paced)[^\d]*([\d\.]+)\s*%", txt_flat, re.IGNORECASE)
+    if mcp_pct_match: 
+        d["mcp_porcentaje"] = float(mcp_pct_match.group(1))
+    else: 
+        # Plan B para porcentaje: Buscar en la tabla de Resumen de Conteo
+        pct_alt = re.search(r"Conteo[^\n]*\b([\d\.]+)\s*%", txt_flat, re.IGNORECASE)
+        if pct_alt: d["mcp_porcentaje"] = float(pct_alt.group(1))
+        else: d["mcp_porcentaje"] = None
 
     dx_text = texto[:2000].upper()
     mcp_en_dx = bool(re.search(r'(?:DX|DIAGN[ÓO]STICO|INDICACI[ÓO]N|COMENTARIOS).*?\b(MCP|MARCAPASO|MARCAPASOS|TRC|CDI)\b', dx_text))
+    
+    # Diagnóstico booleano definitivo de MCP
     d["mcp_presente"] = True if ((d.get("mcp_latidos") and d["mcp_latidos"] > 0) or (d.get("mcp_porcentaje") and d["mcp_porcentaje"] > 0) or mcp_en_dx) else False
+
+    # REPARACIÓN CRÍTICA: Total de latidos más robusto para no dividir por 1 y sacar 5700%
+    d["total_latidos"] = extraer_numero(r"(?:Total\s+de\s+latidos|Latidos\s+Totales|Total\s+Beats)[^\d]*([\d\.\,]+)", texto, int)
+    # Plan B: buscar el número más grande en la sección de Conteo
+    if not d["total_latidos"]:
+        conteo_line = re.search(r"Conteo[^\d]*([\d\.\,]+)", texto, re.IGNORECASE)
+        if conteo_line: d["total_latidos"] = limpiar_numero(conteo_line.group(1), int)
+
+    d["ev_total"]      = extraer_numero(r"(?:Latidos ventriculares|Ventriculares|Total VEB)[^\d]*([\d\.\,]+)", texto, int)
+    d["esv_total"]     = extraer_numero(r"(?:Latidos supraventriculares|Supraventriculares|Total SVEB)[^\d]*([\d\.\,]+)", texto, int)
+    d["latidos_normales"] = None
 
     d["rr_max_seg"] = extraer_numero(r"Intervalo RR.*?M[áa]x\.\s*longitud\s*([\d,\.]+)\s*s", txt_flat, float)
     d["pausas"] = extraer_numero(r"\bPausas?[\s\|]*(\d+)", txt_flat, int)
@@ -636,6 +652,7 @@ def auditar_motor_3_universal(m1, m2, modalidad):
         mcp_pct_m2 = m2.get("mcp_porcentaje") if m2 else None
         d_f["mcp_porcentaje"], _ = arbitrar_valor("mcp_porcentaje", mcp_pct_m1, mcp_pct_m2, float, "baja")
         
+        # EL CANDADO DEFINITIVO DEL MARCAPASOS
         d_f["mcp_presente"] = bool(m1.get("mcp_presente") or (m2 and m2.get("mcp_presente")) or (d_f.get("mcp_porcentaje") and d_f["mcp_porcentaje"] > 0) or (d_f.get("mcp_latidos") and d_f["mcp_latidos"] > 0))
         
         t_bloq = m1.get("tiene_bloqueo_rama", False) or (m2.get("tiene_bloqueo_rama", False) if m2 else False)
@@ -762,6 +779,7 @@ def redactar_informe_holter_11_puntos(d, perfil):
     pausas = d.get("pausas") or 0
     txt_sensado = " con adecuado sensado y captura" if pausas == 0 else ""
     
+    # LA REDACCIÓN ESTÁCTICA DEL MARCAPASOS REPARADA
     if d.get("mcp_presente") and pct_mcp >= 80.0: 
         p1 = f"1. Ritmo comandado por marcapasos definitivo (electroestimulado/sensado en {pct_mcp:.1f}%){txt_sensado} con FC promedio {fc_p_str} lpm{dip_txt}."
     elif d.get("mcp_presente"): 
@@ -805,7 +823,14 @@ def redactar_informe_holter_11_puntos(d, perfil):
     elif d.get("tiene_bloqueo_rama"): p6 = f"6. Alteración de conducción intraventricular por {d.get('bloqueo_detalle', 'bloqueo de rama')}."
     else: p6 = "6. Sin alteración en la conducción intraventricular."
 
-    tot_q = d.get("total_latidos") or 1
+    # LÓGICA DE CARGA REPARADA (Para no dar 5700%)
+    tot_q = d.get("total_latidos")
+    if not tot_q or tot_q <= 1: 
+        # Si el equipo no arrojó el total de latidos (imposible biológicamente), hacemos una aproximación matemática base 
+        # (FC promedio * 60 * 24) para no dañar el porcentaje.
+        if fc_p and fc_p > 0: tot_q = fc_p * 60 * 24
+        else: tot_q = 86400 # Promedio estándar humano para evitar división por 1
+        
     ev = d.get("ev_total") or 0
     carga = (ev / tot_q) * 100 if tot_q > 0 else 0
     
@@ -894,7 +919,7 @@ def redactar_informe_mapa_cencardio(d, perfil):
     p1 = f"1. Promedios 24h: Sistólica {d.get('pas_24h') or 'N/A'} mmHg / Diastólica {d.get('pad_24h') or 'N/A'} mmHg; PAM: {d.get('pam_24h') or 'N/A'} mmHg."
     p2 = f"2. Carga tensional sistólica ({d.get('carga_pas') or 0.0}%) y diastólica ({d.get('carga_pad') or 0.0}%)."
     p3 = f"3. Presión de pulso: {d.get('pp_val') or 'N/A'} mmHg."
-    p4 = f"4. Caída nocturna (Dipping): {d.get('caida_nocturna_val') or 0.0}%."
+    p4 = f"4. Caída nocturna (Dipping): {d.get('caida_nocturna_val',0.0)}%."
     
     c_pas = d.get('carga_pas') or 0.0
     pas_h = d.get('pas_24h') or 0
@@ -1454,7 +1479,7 @@ with tab_procesar:
                 c_b1, c_b2 = st.columns(2)
                 c_b1.download_button("📄 DESCARGAR FIRMADO", data=p_final, file_name=f"{normalizar_nombre_archivo(p_nom)}_{cups_actual}.pdf", mime="application/pdf", type="primary", use_container_width=True)
                 if c_b2.button("💾 Guardar Clínico", use_container_width=True):
-                    p_clave = f"FC {d.get('fc_prom') or 0} | SDNN {d.get('sdnn_24h') or 0}ms" if mod_actual == "HOLTER" else f"PAM {d.get('pam_24h') or 0} mmHg"
+                    p_clave = f"FC {d.get('fc_prom',0)} | SDNN {d.get('sdnn_24h',0)}ms" if mod_actual == "HOLTER" else f"PAM {d.get('pam_24h',0)} mmHg"
                     ok, msg = guardar_estudio_servicio(p_nom, mod_nombre, cups_actual, p_clave, perfil_activo['nombre_completo'], txt_edit, p_final, uid)
                     if ok: st.success(msg)
                     else: st.error(msg)
