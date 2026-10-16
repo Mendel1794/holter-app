@@ -246,7 +246,7 @@ def sincronizar_directorio_servicio(df):
     return True, f"Se sincronizaron {registros} pacientes."
 
 # ==============================================================================
-# AUDITORÍA CLÍNICA (SANITY CHECKS)
+# AUDITORÍA CLÍNICA (SANITY CHECKS Y SEMAFORIZACIÓN)
 # ==============================================================================
 def ejecutar_sanity_checks(modalidad, datos):
     alertas, bloqueos = [], []
@@ -304,22 +304,30 @@ def mostrar_semaforizacion_clinica(modalidad, datos):
         tsv = datos.get("tsv_episodios") or 0
         bloqueo = datos.get("tiene_bloqueo_rama", False)
         mcp = datos.get("mcp_presente", False)
+        lat_caidos = datos.get("latidos_caidos") or 0
+        
+        ritmo_irregular = (pausas > 0) or (lat_caidos > 0) or (carga_ev >= 10.0) or mcp
 
         if tv and tv > 0: detalles.append(f"Taquicardia Ventricular documentada ({tv} episodios)")
-        if sdnn is not None and sdnn > 0 and sdnn < 30 and not mcp: detalles.append(f"Variabilidad Autonómica Severamente Disminuida (SDNN: {sdnn} ms, Riesgo Alto)")
+        if sdnn is not None and sdnn > 0 and sdnn < 30 and not ritmo_irregular: detalles.append(f"Variabilidad Autonómica Severamente Disminuida (SDNN: {sdnn} ms, Riesgo Alto)")
         if pausas and pausas > 0: detalles.append(f"Pausas patológicas registradas ({pausas} pausas)")
+        if lat_caidos > 0: detalles.append(f"Bloqueos AV o latidos caídos documentados ({lat_caidos} latidos)")
         if qtc is not None and qtc > 500: detalles.append(f"Intervalo QTc Severamente Prolongado ({qtc} ms, riesgo proarrítmico)")
         if carga_ev >= 10.0: detalles.append(f"Carga Ectópica Ventricular Crítica ({carga_ev:.1f}%)")
 
         if detalles: nivel, titulo = "ROJO", "ALERTA CLÍNICA: HALLAZGOS CRÍTICOS"
         else:
-            if mcp: detalles.append(f"Paciente portador de Dispositivo Cardíaco ({datos.get('mcp_porcentaje') or 0.0:.1f}%)")
+            if mcp: detalles.append(f"Paciente portador de Dispositivo Cardíaco")
             if pr_int is not None and pr_int > 200: detalles.append(f"Bloqueo AV documentado (PR: {pr_int} ms)")
             if duplas and duplas > 0: detalles.append(f"Ectopia Ventricular Compleja: Duplas presentes ({duplas})")
             if tsv and tsv > 0: detalles.append(f"Taquicardia Supraventricular paroxística ({tsv} rachas)")
             if bloqueo and not mcp: detalles.append("Trastorno de la conducción intraventricular: Bloqueo de rama")
-            if sdnn is not None and sdnn >= 30 and sdnn <= 100 and not mcp: detalles.append(f"Variabilidad de la FC disminuida (SDNN: {sdnn} ms, Riesgo Moderado)")
+            
+            if ritmo_irregular and sdnn is not None: detalles.append(f"VFC no valorable clínicamente por alteraciones del ritmo base (SDNN máquina: {sdnn} ms)")
+            elif sdnn is not None and sdnn >= 30 and sdnn <= 100 and not ritmo_irregular: detalles.append(f"Variabilidad de la FC disminuida (SDNN: {sdnn} ms, Riesgo Moderado)")
+            
             if qtc is not None and qtc > 460: detalles.append(f"QTc prolongado ({qtc} ms)")
+            
             if detalles: nivel, titulo = "AMARILLO", "PRECAUCIÓN CLÍNICA: DISPOSITIVO O PARÁMETROS LIMÍTROFES"
             else: detalles.append("Ritmo sinusal conservado, modulación autonómica normal y sin arritmias complejas.")
             
@@ -387,7 +395,7 @@ def generar_grafica_tacograma(d):
     return fig
 
 # ==============================================================================
-# MOTOR 1: DECODIFICADOR MATRICIAL (EXTRACCIÓN 100% BLINDADA)
+# MOTOR 1: DECODIFICADOR MATRICIAL C++ (REGLAS DE PRECISIÓN MILIMÉTRICA)
 # ==============================================================================
 def limpiar_numero(val_str, tipo=int):
     if not val_str: return None
@@ -420,12 +428,8 @@ def extraer_m1_holter(texto):
     d["fc_noc"]  = extraer_numero(r"Noche.*?Prom\.\.?[\s\|]*(\d{2,3})", txt_flat, int)
     d["pr_intervalo"] = extraer_numero(r"(?:Intervalo\s*PR|PR\s*Interval|PR\s*promedio|PR\s*medio)\s*[:\-\|]?\s*(\d{2,3})\b", txt_flat, int)
 
-    # =====================================================================
-    # EL DECODIFICADOR MATRICIAL ABSOLUTO PARA SPACELABS
-    # Ignora símbolos extraños (<, >) y cuenta los cajones matemáticamente
-    # =====================================================================
+    # REGLA DEL MARCAPASOS BLINDADA
     d["spacelabs_matrix_ok"] = False
-    
     raw_conteo = re.search(r"Conteo[\s\|]+([\d\.,\s\|%<>]+)", texto, re.IGNORECASE)
     if raw_conteo:
         line_str = raw_conteo.group(1).replace('<', '').replace('>', '').strip()
@@ -433,8 +437,6 @@ def extraer_m1_holter(texto):
         
         if len(parts) >= 8:
             d["total_latidos"] = limpiar_numero(parts[0])
-            
-            # El Marcapasos SIEMPRE está en los dos últimos números de la fila en Spacelabs
             mcp_part1 = parts[-2]
             mcp_part2 = parts[-1]
             
@@ -447,7 +449,6 @@ def extraer_m1_holter(texto):
             
             d["mcp_presente"] = bool((d["mcp_latidos"] and d["mcp_latidos"] > 0) or (d["mcp_porcentaje"] and d["mcp_porcentaje"] > 0))
             
-            # Buscar EV y ESV matricialmente
             for idx, p in enumerate(parts):
                 if idx > 1 and not '%' in p:
                     try:
@@ -458,7 +459,7 @@ def extraer_m1_holter(texto):
             
             d["spacelabs_matrix_ok"] = True
 
-    # Decodificador de Variabilidad SDNN (Ignora el "24" de horas)
+    # Decodificador de Variabilidad SDNN (Ignora la palabra "horas" para no cruzar el "24")
     d["sdnn_24h"] = None
     m_sdnn = re.search(r"Valor de 24 horas[\s\|]+([\d\.,\s\|]+)", texto, re.IGNORECASE)
     if m_sdnn:
@@ -474,7 +475,6 @@ def extraer_m1_holter(texto):
         parts_qtc = [p.strip() for p in re.split(r'[\s\|]+', line_str) if p.strip()]
         if len(parts_qtc) >= 3: d["qtc_prom"] = limpiar_numero(parts_qtc[2])
 
-    # FALLBACK DE EXTRACCIÓN (Para cuando el equipo no es Spacelabs)
     if not d.get("spacelabs_matrix_ok"):
         d["mcp_latidos"] = extraer_numero(r"(?:Marcapasos?|Estimulados?|Paced)\s*[:\|]?\s*(\d{1,3}(?:\.\d{3})*)\b(?!\s*%)", txt_flat, int)
         mcp_pct_match = re.search(r"(?:Marcapasos?|Estimulados?|Paced)\s*[:\|]?\s*([\d\.]+)\s*%", txt_flat, re.IGNORECASE)
@@ -488,7 +488,6 @@ def extraer_m1_holter(texto):
     if not d.get("sdnn_24h"): d["sdnn_24h"] = extraer_numero(r"\bSDNN\b[^\d]*(\d{2,3})", txt_flat, int)
     if not d.get("qtc_prom"): d["qtc_prom"] = extraer_numero(r"\bQTc\b[^\d]*(\d{3})", txt_flat, int)
 
-    # Extracciones Adicionales
     d["rr_max_seg"] = extraer_numero(r"Intervalo RR.*?M[áa]x\.\s*longitud\s*([\d,\.]+)\s*s", txt_flat, float)
     d["pausas"] = extraer_numero(r"\bPausas?[\s\|]*(\d+)", txt_flat, int)
     d["pausa_max_seg"] = extraer_numero(r"Pausa.*?Máx.*?([\d\.,]+)\s*s", txt_flat, float)
@@ -635,15 +634,11 @@ def auditar_motor_3_universal(m1, m2, modalidad):
         d_f["paciente"] = m2.get("paciente") if (m2 and m2.get("paciente")) else m1.get("paciente", "PACIENTE ANÓNIMO")
         d_f["cedula"] = m2.get("cedula") if (m2 and m2.get("cedula")) else m1.get("cedula", "")
 
-        # CANDADO DE PAUSAS FISIOLÓGICAS
         if d_f.get("rr_max_seg") is not None and d_f.get("pausas") is not None:
             if d_f["rr_max_seg"] > 0 and d_f["rr_max_seg"] < 2.0 and d_f["pausas"] > 0:
                 notas.append(f"🔒 VETO FISIOLÓGICO: RR Máx es {d_f['rr_max_seg']}s. Imposible pausas > 2.0s. Se vetan pausas.")
                 d_f["pausas"] = None
 
-        # =================================================================
-        # EL VETO ESTRUCTURAL ABSOLUTO (TOMA EL CONTROL DE LA IA)
-        # =================================================================
         if m1.get("spacelabs_matrix_ok"):
             d_f["total_latidos"] = m1.get("total_latidos")
             d_f["ev_total"] = m1.get("ev_total")
@@ -652,7 +647,7 @@ def auditar_motor_3_universal(m1, m2, modalidad):
             d_f["mcp_porcentaje"] = m1.get("mcp_porcentaje", 0.0)
             d_f["mcp_latidos"] = m1.get("mcp_latidos", 0)
             d_f["latidos_normales"] = m1.get("latidos_normales")
-            notas.append("🛡️ VETO ESTRUCTURAL: Decodificador Spacelabs tomó el control absoluto de la matriz. Alucinaciones de la IA ignoradas.")
+            notas.append("🛡️ VETO ESTRUCTURAL: Decodificador Spacelabs tomó el control absoluto de la matriz.")
         else:
             for k in ["total_latidos", "ev_total", "esv_total"]:
                 val, _ = arbitrar_valor(k, m1.get(k), m2.get(k) if m2 else None, int, "alta")
@@ -879,13 +874,22 @@ def redactar_informe_holter_11_puntos(d, perfil):
     if ev_pac is not None and ev_pac > 0: p8 = f"8. Diario paciente: {ev_pac} eventos marcados."
     else: p8 = "8. No refirió síntomas."
 
+    # =========================================================
+    # EL VETO CLÍNICO DE VARIABILIDAD (SDNN)
+    # =========================================================
     sdnn = d.get("sdnn_24h")
     mod_mcp = " (Modificada por estimulación de marcapasos)." if d.get("mcp_presente") else ""
     
+    ritmo_irregular = (pausas > 0) or ((d.get('latidos_caidos') or 0) > 0) or (carga >= 10.0) or d.get("mcp_presente")
+
     if sdnn is None:
-        p9 = f"9. Variabilidad de la frecuencia cardíaca no reportada explícitamente en el documento{mod_mcp}."
+        p9 = "9. Variabilidad de la frecuencia cardíaca no reportada explícitamente en el documento."
         p11 = "11. Riesgo del paciente SDNN 20 a 24 hrs ( Pendiente de Valoración )."
         d_vfc = "VFC no especificada."
+    elif ritmo_irregular:
+        p9 = f"9. Variabilidad de la frecuencia cardíaca NO VALORABLE por alteraciones del ritmo/conducción (SDNN máquina: {sdnn} ms)."
+        p11 = "11. Riesgo del paciente SDNN 20 a 24 hrs ( No Valorable por Arritmia/Pausas )."
+        d_vfc = "VFC no valorable clínicamente."
     else:
         try: sdnn_val = int(float(sdnn))
         except Exception: sdnn_val = None 
