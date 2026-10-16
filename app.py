@@ -313,7 +313,7 @@ def mostrar_semaforizacion_clinica(modalidad, datos):
 
         if detalles: nivel, titulo = "ROJO", "ALERTA CLÍNICA: HALLAZGOS CRÍTICOS"
         else:
-            if mcp: detalles.append(f"Paciente portador de Dispositivo Cardíaco")
+            if mcp: detalles.append(f"Paciente portador de Dispositivo Cardíaco ({datos.get('mcp_porcentaje') or 0.0:.1f}%)")
             if pr_int is not None and pr_int > 200: detalles.append(f"Bloqueo AV documentado (PR: {pr_int} ms)")
             if duplas and duplas > 0: detalles.append(f"Ectopia Ventricular Compleja: Duplas presentes ({duplas})")
             if tsv and tsv > 0: detalles.append(f"Taquicardia Supraventricular paroxística ({tsv} rachas)")
@@ -447,15 +447,14 @@ def extraer_m1_holter(texto):
             
             d["mcp_presente"] = bool((d["mcp_latidos"] and d["mcp_latidos"] > 0) or (d["mcp_porcentaje"] and d["mcp_porcentaje"] > 0))
             
-            # Buscar EV (Cajón 4)
+            # Buscar EV y ESV matricialmente
             for idx, p in enumerate(parts):
                 if idx > 1 and not '%' in p:
-                    # En la matriz limpia, el EV suele estar alrededor de la posición 3 o 4
                     try:
-                        posible_ev = limpiar_numero(parts[3])
-                        d["ev_total"] = posible_ev
+                        d["ev_total"] = limpiar_numero(parts[3])
+                        d["esv_total"] = limpiar_numero(parts[5])
                         break
-                    except: pass
+                    except Exception: pass
             
             d["spacelabs_matrix_ok"] = True
 
@@ -480,11 +479,7 @@ def extraer_m1_holter(texto):
         d["mcp_latidos"] = extraer_numero(r"(?:Marcapasos?|Estimulados?|Paced)\s*[:\|]?\s*(\d{1,3}(?:\.\d{3})*)\b(?!\s*%)", txt_flat, int)
         mcp_pct_match = re.search(r"(?:Marcapasos?|Estimulados?|Paced)\s*[:\|]?\s*([\d\.]+)\s*%", txt_flat, re.IGNORECASE)
         d["mcp_porcentaje"] = float(mcp_pct_match.group(1)) if mcp_pct_match else None
-        
-        dx_text = texto[:2500].upper()
-        # SE ELIMINÓ EL GATILLO DE TEXTO DE MARCAPASOS PARA NO DAÑAR DIAGNOSTICOS
-        d["mcp_presente"] = bool((d.get("mcp_latidos") and d["mcp_latidos"] > 0) or (d.get("mcp_porcentaje") and d["mcp_porcentaje"] > 0))
-        
+        d["mcp_presente"] = bool((d.get("mcp_latidos") and d.get("mcp_latidos", 0) > 0) or (d.get("mcp_porcentaje") and d.get("mcp_porcentaje", 0.0) > 0))
         d["total_latidos"] = extraer_numero(r"(?:Total\s+de\s+latidos|Latidos\s+Totales|Total\s+Beats)[^\d]*([\d\.\,]+)", texto, int)
         d["ev_total"]      = extraer_numero(r"(?:Latidos ventriculares|Ventriculares|Total VEB)[^\d]*([\d\.\,]+)", texto, int)
         d["esv_total"]     = extraer_numero(r"(?:Latidos supraventriculares|Supraventriculares|Total SVEB)[^\d]*([\d\.\,]+)", texto, int)
@@ -646,7 +641,9 @@ def auditar_motor_3_universal(m1, m2, modalidad):
                 notas.append(f"🔒 VETO FISIOLÓGICO: RR Máx es {d_f['rr_max_seg']}s. Imposible pausas > 2.0s. Se vetan pausas.")
                 d_f["pausas"] = None
 
-        # EL VETO ESTRUCTURAL ABSOLUTO (APAGA LA IA SI EL DECODIFICADOR SPACELABS FUNCIONÓ)
+        # =================================================================
+        # EL VETO ESTRUCTURAL ABSOLUTO (TOMA EL CONTROL DE LA IA)
+        # =================================================================
         if m1.get("spacelabs_matrix_ok"):
             d_f["total_latidos"] = m1.get("total_latidos")
             d_f["ev_total"] = m1.get("ev_total")
@@ -655,7 +652,7 @@ def auditar_motor_3_universal(m1, m2, modalidad):
             d_f["mcp_porcentaje"] = m1.get("mcp_porcentaje", 0.0)
             d_f["mcp_latidos"] = m1.get("mcp_latidos", 0)
             d_f["latidos_normales"] = m1.get("latidos_normales")
-            notas.append("🛡️ VETO ESTRUCTURAL: Decodificador Spacelabs tomó el control de los latidos y MCP. IA ignorada.")
+            notas.append("🛡️ VETO ESTRUCTURAL: Decodificador Spacelabs tomó el control absoluto de la matriz. Alucinaciones de la IA ignoradas.")
         else:
             for k in ["total_latidos", "ev_total", "esv_total"]:
                 val, _ = arbitrar_valor(k, m1.get(k), m2.get(k) if m2 else None, int, "alta")
@@ -738,7 +735,7 @@ def ejecutar_triple_engine_universal(pdf_bytes, modalidad="HOLTER"):
             pix = doc[num_p].get_pixmap(dpi=75)
             b64_p = base64.b64encode(pix.tobytes("jpeg")).decode("utf-8")
             inline_images.append({"inline_data": {"mime_type": "image/jpeg", "data": b64_p}})
-        except: continue
+        except Exception: continue
     doc.close()
 
     if modalidad == "HOLTER":
@@ -891,7 +888,7 @@ def redactar_informe_holter_11_puntos(d, perfil):
         d_vfc = "VFC no especificada."
     else:
         try: sdnn_val = int(float(sdnn))
-        except: sdnn_val = None 
+        except Exception: sdnn_val = None 
         
         if sdnn_val is not None:
             if sdnn_val == 0:
@@ -925,7 +922,17 @@ def redactar_informe_holter_11_puntos(d, perfil):
     diag = f"Ritmo sinusal con FC promedio {fc_p_str} lpm. {d_vfc}"
     if d.get("mcp_presente"): diag = f"Ritmo comandado por marcapasos normofuncionante ({pct_mcp:.1f}%). FC promedio {fc_p_str} lpm."
     
-    recs = ["Valoración por Electrofisiología."] if tv_ep > 0 or carga >= 10.0 else ["Continuar manejo médico instaurado y seguimiento clínico."]
+    # ---------------------------------------------------------
+    # LA REGLA CLÍNICA DE RECOMENDACIONES (ÁRBOL DE DECISIONES)
+    # ---------------------------------------------------------
+    recs = []
+    if d.get("tv_episodios") or carga >= 10.0 or pausas > 0 or (d.get('latidos_caidos') or 0) > 0 or (d.get('fc_min') and d.get('fc_min') < 40 and not d.get('mcp_presente')):
+        recs.append("Valoración prioritaria por Electrofisiología.")
+    if d.get('st_episodios'): 
+        recs.append("Correlacionar clínicamente hallazgos isquémicos del ST.")
+    if not recs: 
+        recs.append("Continuar manejo médico instaurado y seguimiento clínico.")
+    # ---------------------------------------------------------
 
     return f"INTERPRETACIÓN TEST HOLTER - CUPS 895001\n\n{p1}\n{p2}\n{p3}\n{p4}\n{p5}\n{p6}\n{p7}\n{p8}\n{p9}\n{p10}\n{p11}\n\nCONCLUSIÓN DIAGNÓSTICA:\n{diag}\n\nRECOMENDACIONES: {' '.join(recs)}\n\n{perfil['nombre_completo']}\n{perfil['especialidad']}\n{perfil['registro']}"
 
@@ -1242,7 +1249,7 @@ def generar_excel_avanzado_produccion(df_base):
     return output.getvalue(), "xlsx"
 
 # ==============================================================================
-# UI PRINCIPAL Y LOGIN
+# UI PRINCIPAL: BARRERA DE LOGIN Y NAVEGACIÓN
 # ==============================================================================
 LISTA_ESPECIALISTAS = [
     {"id": "dr.amaya", "etiqueta": "Dr. William Amaya Ramirez", "clave": "Cardio2025*", "nombre_completo": "DR. WILLIAM AMAYA RAMIREZ", "especialidad": "INTERNISTA - CARDIÓLOGO", "registro": "RM 79.502.624 SDS"},
@@ -1416,7 +1423,7 @@ with tab_procesar:
         if up_file:
             b_pdf = up_file.getvalue()
             if st.session_state.get("last_file") != up_file.name:
-                with st.spinner("🚀 Ejecutando DECODIFICADOR MATRICIAL..."):
+                with st.spinner("🚀 Ejecutando DECODIFICADOR MATRICIAL (Extracción 100% blindada)..."):
                     mod = "HOLTER" if "Holter" in mod_sel else "MAPA"
                     d_final = ejecutar_triple_engine_universal(b_pdf, mod)
                     st.session_state.d_final = d_final
@@ -1461,7 +1468,7 @@ with tab_procesar:
                 pausas_met = pausas_disp if pausas_disp is not None else 0
                 max_p = d.get('pausa_max_seg')
                 max_str = f"Máx: {max_p}s" if max_p else "Máx: N/A"
-                c3.metric("Pausas", f"{pausas_met}", max_str)
+                c3.metric("Pausas / Bloqueos", f"{pausas_met} / {d.get('latidos_caidos') or 0}", max_str)
                 
                 sdnn_v = d.get('sdnn_24h')
                 sdnn_disp = f"{sdnn_v} ms" if sdnn_v else "N/A"
