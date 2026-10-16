@@ -634,6 +634,7 @@ def auditar_motor_3_universal(m1, m2, modalidad):
         d_f["paciente"] = m2.get("paciente") if (m2 and m2.get("paciente")) else m1.get("paciente", "PACIENTE ANÓNIMO")
         d_f["cedula"] = m2.get("cedula") if (m2 and m2.get("cedula")) else m1.get("cedula", "")
 
+        # CANDADO DE PAUSAS FISIOLÓGICAS
         if d_f.get("rr_max_seg") is not None and d_f.get("pausas") is not None:
             if d_f["rr_max_seg"] > 0 and d_f["rr_max_seg"] < 2.0 and d_f["pausas"] > 0:
                 notas.append(f"🔒 VETO FISIOLÓGICO: RR Máx es {d_f['rr_max_seg']}s. Imposible pausas > 2.0s. Se vetan pausas.")
@@ -1035,9 +1036,17 @@ def inyectar_holter_pdf(pdf_bytes, texto_informe, paciente_nom, perfil, cod_uuid
     pagina1 = doc[0]
     rects_f = pagina1.search_for("Firma del médico") or pagina1.search_for("Firma del operador")
     rects_h = pagina1.search_for("Hallazgos:")
+    
     y_base = rects_f[0].y0 if rects_f else 740
     y0 = (rects_h[0].y1 + 4) if rects_h else 545
     y1 = y_base - 62
+    
+    # ---------------------------------------------------------
+    # SALVAVIDAS GEOMÉTRICO (Previene el ValueError por cajas de tamaño negativo)
+    # ---------------------------------------------------------
+    if y1 <= y0 + 10:
+        y1 = y0 + 150
+    # ---------------------------------------------------------
 
     pagina1.draw_rect(fitz.Rect(0, y0, pagina1.rect.width, y1), color=None, fill=(1, 1, 1), overlay=True)
     
@@ -1071,8 +1080,16 @@ def inyectar_mapa_pdf(pdf_bytes, texto_informe, paciente_nom, perfil, cod_uuid, 
     pagina1 = doc[0]
     rect_m = pagina1.search_for("Presión arterial por la mañana")
     rect_r = pagina1.search_for("Resumen de todo el registro")
+    
     y0 = (rect_m[0].y1 + 2) if rect_m else 230
     y1 = (rect_r[0].y0 - 4) if rect_r else 425
+
+    # ---------------------------------------------------------
+    # SALVAVIDAS GEOMÉTRICO (Previene el ValueError por cajas de tamaño negativo)
+    # ---------------------------------------------------------
+    if y1 <= y0 + 10:
+        y1 = y0 + 200
+    # ---------------------------------------------------------
 
     pagina1.draw_rect(fitz.Rect(0, y0, pagina1.rect.width, y1), color=None, fill=(1, 1, 1), overlay=True)
 
@@ -1427,7 +1444,7 @@ with tab_procesar:
         if up_file:
             b_pdf = up_file.getvalue()
             if st.session_state.get("last_file") != up_file.name:
-                with st.spinner("🚀 Ejecutando DECODIFICADOR MATRICIAL (Extracción 100% blindada)..."):
+                with st.spinner("🚀 Ejecutando DECODIFICADOR MATRICIAL..."):
                     mod = "HOLTER" if "Holter" in mod_sel else "MAPA"
                     d_final = ejecutar_triple_engine_universal(b_pdf, mod)
                     st.session_state.d_final = d_final
