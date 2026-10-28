@@ -1,0 +1,49 @@
+name: Mantener CENCARDIO Activo 24/7
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'  # Se ejecuta automáticamente cada 30 minutos
+  workflow_dispatch:
+
+jobs:
+  wake_up:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configurar entorno Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Instalar Playwright
+        run: |
+          npm init -y
+          npm install playwright
+
+      - name: Ejecutar navegador headless para despertar la app
+        run: |
+          npx playwright install chromium
+          node -e '
+          const { chromium } = require("playwright");
+          (async () => {
+            const browser = await chromium.launch();
+            const page = await browser.newPage();
+            try {
+              console.log("Conectando a la estación de trabajo...");
+              await page.goto("https://holtercencardio.streamlit.app/", { waitUntil: "networkidle", timeout: 60000 });
+              
+              // Detecta si aparece la pantalla de reposo y hace clic en el botón de despertar automáticamente
+              const wakeBtn = await page.$("button:has-text(\"Yes, get this app back up\")");
+              if (wakeBtn) {
+                console.log("La app estaba dormida. Despertándola...");
+                await wakeBtn.click();
+                await page.waitForTimeout(10000);
+              } else {
+                console.log("La aplicación ya se encuentra activa.");
+              }
+            } catch (e) {
+              console.log("Aviso de conexión:", e.message);
+            } finally {
+              await browser.close();
+            }
+          })();
+          '
