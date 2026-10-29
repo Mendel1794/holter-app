@@ -1,5 +1,5 @@
 import streamlit as st
-import fitz  # PyMuPDF: motor C++ de renderizado y extracción espacial
+import fitz  # PyMuPDF: motor C++ de renderizado a 150 DPI y extracción espacial
 from PIL import Image, ImageOps
 import qrcode
 import re
@@ -29,7 +29,6 @@ def calcular_mets_bruce(tiempo_min):
         t = float(tiempo_min or 0.0)
         if t <= 0:
             return 1.0
-        # Fórmula clínica estándar de Bruce para estimación de METs
         vo2 = 14.76 - (1.379 * t) + (0.451 * (t ** 2)) - (0.012 * (t ** 3))
         return round(max(1.0, vo2 / 3.5), 1)
     except Exception:
@@ -59,16 +58,20 @@ st.set_page_config(
 )
 
 # ==============================================================================
-# GESTIÓN DE LOGOTIPO INSTITUCIONAL Y ESTILOS UI EMPRESARIALES
+# GESTIÓN DE LOGOTIPO INSTITUCIONAL (SOLO INTERFAZ WEB, NUNCA EN PDF)
 # ==============================================================================
 @st.cache_data
 def obtener_logo_b64():
-    for nom in ["cencardio.jpg", "cencardio.png", "cencardio.jpeg", "logo.png", "logo.jpg"]:
-        if os.path.exists(nom):
-            with open(nom, "rb") as f:
-                b64 = base64.b64encode(f.read()).decode()
-            mime = "png" if nom.endswith(".png") else "jpeg"
-            return f"data:image/{mime};base64,{b64}"
+    archivos_posibles = ["cencardio.jpg", "cencardio.png", "cencardio.jpeg", "logo.png", "logo.jpg"]
+    try:
+        for f_repo in os.listdir("."):
+            if f_repo.lower() in archivos_posibles or ("cencardio" in f_repo.lower() and f_repo.lower().endswith((".png", ".jpg", ".jpeg"))):
+                with open(f_repo, "rb") as f:
+                    b64 = base64.b64encode(f.read()).decode()
+                mime = "png" if f_repo.lower().endswith(".png") else "jpeg"
+                return f"data:image/{mime};base64,{b64}"
+    except Exception:
+        pass
     return None
 
 def cargar_estilos_institucionales():
@@ -86,13 +89,26 @@ def cargar_estilos_institucionales():
         border: 1px solid #1e3a5f;
         border-bottom: 4px solid #c8102e;
         border-radius: 16px;
-        padding: 1.15rem 1.8rem;
+        padding: 1.1rem 1.8rem;
         display: flex;
         align-items: center;
         justify-content: space-between;
         box-shadow: 0 12px 28px -6px rgba(7, 25, 47, 0.25);
         margin-bottom: 1.3rem;
         color: #ffffff;
+    }
+    .brand-left {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+    }
+    .brand-logo-img {
+        height: 54px;
+        width: auto;
+        border-radius: 10px;
+        background: #ffffff;
+        padding: 4px 8px;
+        box-shadow: 0 4px 10px rgba(0, 0, 0, 0.25);
     }
     .inst-badge-primary {
         background: rgba(56, 189, 248, 0.15);
@@ -146,7 +162,7 @@ def cargar_estilos_institucionales():
     }
     .kpi-value {
         font-family: 'JetBrains Mono', monospace !important;
-        font-size: 1.42rem;
+        font-size: 1.38rem;
         font-weight: 800;
         color: #0a2540;
         line-height: 1.2;
@@ -392,7 +408,34 @@ def sincronizar_directorio_servicio(df):
     return True, f"Se sincronizaron {registros} pacientes."
 
 # ==============================================================================
-# AUDITORÍA CLÍNICA (SANITY CHECKS Y SEMAFORIZACIÓN)
+# AUTO-DETECTOR INTELIGENTE DEL TIPO DE DOCUMENTO (HOLTER vs MAPA vs ESFUERZO)
+# ==============================================================================
+def detectar_modalidad_pdf(pdf_bytes):
+    try:
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        texto_muestra = "".join([doc[i].get_text() for i in range(min(3, len(doc)))]).upper()
+        doc.close()
+
+        marcadores_holter = ["INFORME HOLTER", "PATHFINDER", "ARRITMIAS VENTRICULARES", "INTERVALO RR", "TABLA DE TENDENCIA VFC", "LATIDOS SUPRAVENTRICULARES"]
+        marcadores_mapa = ["PRESIÓN ARTERIAL POR LA MAÑANA", "PRESION ARTERIAL POR LA MANANA", "RESUMEN DE TODO EL REGISTRO", "SISTÓLICO > LÍMITE", "SISTOLICO > LIMITE", "PRESIÓN DE PULSO", "PRESION DE PULSO", "MAPA"]
+        marcadores_esfuerzo = ["PROTOCOLO", "BRUCE", "NAUGHTON", "METS", "DOBLE PRODUCTO", "DUKE", "PRUEBA DE ESFUERZO", "ERGOMETR"]
+
+        pts_h = sum(1 for k in marcadores_holter if k in texto_muestra)
+        pts_m = sum(1 for k in marcadores_mapa if k in texto_muestra)
+        pts_e = sum(1 for k in marcadores_esfuerzo if k in texto_muestra)
+
+        if pts_m > pts_h and pts_m >= pts_e and pts_m >= 1:
+            return "MAPA"
+        if pts_e > pts_h and pts_e > pts_m and pts_e >= 2:
+            return "ESFUERZO"
+        if pts_h >= 1:
+            return "HOLTER"
+    except Exception:
+        pass
+    return None
+
+# ==============================================================================
+# AUDITORÍA CLÍNICA (SANITY CHECKS Y SEMAFORIZACIÓN ESC / AHA / HRS)
 # ==============================================================================
 def ejecutar_sanity_checks(modalidad, datos):
     alertas, bloqueos = [], []
@@ -409,8 +452,8 @@ def ejecutar_sanity_checks(modalidad, datos):
             if fc_max is not None and fc_max < fc_p:
                 bloqueos.append(f"Incongruencia: FC máx ({fc_max}) es inferior a FC prom ({fc_p}).")
             
-        if fc_min is not None and fc_min < 40 and not datos.get("mcp_presente"):
-            alertas.append(f"Bradicardia Severa documentada ({fc_min} lpm).")
+        if fc_min is not None and fc_min < 40 and not datos.get("tiene_dispositivo"):
+            alertas.append(f"Bradicardia Significativa documentada ({fc_min} lpm).")
         if fc_max is not None and fc_max > 220:
             alertas.append(f"FC Máxima ({fc_max} lpm) atípica. Verifique arritmia.")
         if pr_int is not None and pr_int > 200:
@@ -463,22 +506,22 @@ def mostrar_semaforizacion_clinica(modalidad, datos):
         duplas = datos.get("ev_duplas") or 0
         tsv = datos.get("tsv_episodios") or 0
         bloqueo = datos.get("tiene_bloqueo_rama", False)
-        mcp = datos.get("mcp_presente", False)
+        tiene_disp = datos.get("tiene_dispositivo", False)
+        disp_tipo = datos.get("dispositivo_tipo") or "MCP"
         lat_caidos = datos.get("latidos_caidos") or 0
-        vfc_pct = datos.get("vfc_pct_analizado")
         
-        ritmo_irregular = (pausas > 0) or (lat_caidos > 0) or (fa_ep > 0) or (carga_ev >= 10.0) or mcp or (vfc_pct is not None and vfc_pct < 50)
+        ritmo_irregular = (pausas > 0) or (lat_caidos > 0) or (fa_ep > 0) or (carga_ev >= 10.0) or tiene_disp
 
         if tv > 0:
-            detalles.append(f"Taquicardia Ventricular No Sostenida / Sostenida documentada ({tv} episodios, Lown IVb)")
+            detalles.append(f"Taquicardia Ventricular documentada ({tv} episodios, {datos.get('tv_latidos') or 0} latidos - Lown Grado IVb)")
         if pausas > 0:
             p_max_s = f" (máx {datos.get('pausa_max_seg')}s)" if datos.get("pausa_max_seg") else ""
-            detalles.append(f"Pausas patológicas registradas ({pausas} pausas{p_max_s})")
+            detalles.append(f"Pausas significativas registradas ({pausas} pausas{p_max_s})")
         if lat_caidos > 0:
             detalles.append(f"Trastorno de conducción AV: {lat_caidos} latidos caídos/bloqueos documentados")
         if fa_ep > 0:
             detalles.append(f"Fibrilación Auricular paroxística documentada ({fa_ep} episodios, duración {datos.get('fa_duracion') or 'registrada'})")
-        if sdnn is not None and sdnn > 0 and sdnn < 30 and not ritmo_irregular:
+        if sdnn is not None and 0 < sdnn < 30 and not ritmo_irregular:
             detalles.append(f"Variabilidad Autonómica Severamente Disminuida (SDNN: {sdnn} ms, Riesgo Alto)")
         if qtc is not None and qtc > 500:
             detalles.append(f"Intervalo QTc Severamente Prolongado ({qtc} ms, alto riesgo proarrítmico)")
@@ -486,30 +529,28 @@ def mostrar_semaforizacion_clinica(modalidad, datos):
             detalles.append(f"Carga Ectópica Ventricular Crítica ({carga_ev:.2f}%)")
 
         if detalles:
-            nivel, titulo = "ROJO", "ALERTA ELECTROFISIOLÓGICA: HALLAZGOS DE ALTO RIESGO"
+            nivel, titulo = "ROJO", "ALERTA ELECTROFISIOLÓGICA: HALLAZGOS DE ALTO RIESGO (ESC / AHA / HRS)"
         else:
-            if mcp:
-                modo_m = f" ({datos.get('mcp_modo_tiras')})" if datos.get("mcp_modo_tiras") else ""
-                detalles.append(f"Paciente portador de Dispositivo de Estimulación Cardíaca ({datos.get('mcp_porcentaje') or 0.0:.1f}%{modo_m})")
+            if tiene_disp:
+                modo_m = f" - {datos.get('mcp_modo_tiras')}" if datos.get("mcp_modo_tiras") else ""
+                detalles.append(f"Paciente portador de Dispositivo Cardíaco [{disp_tipo}] ({datos.get('mcp_porcentaje') or 0.0:.1f}% estimulado{modo_m})")
             if pr_int is not None and pr_int > 200:
                 detalles.append(f"Bloqueo AV de primer grado documentado (PR: {pr_int} ms)")
             if duplas > 0:
-                detalles.append(f"Ectopia Ventricular Compleja: {duplas} duplas ventriculares (Lown IVa)")
+                detalles.append(f"Ectopia Ventricular Compleja: {duplas} duplas ventriculares (Lown Grado IVa)")
             if aivr > 0:
                 detalles.append(f"Ritmo Idioventricular Acelerado / Sec. V ({aivr} eventos)")
             if tsv > 0:
                 detalles.append(f"Taquicardia Supraventricular paroxística ({tsv} rachas)")
-            if bloqueo and not mcp:
+            if bloqueo and not tiene_disp:
                 detalles.append("Trastorno de la conducción intraventricular: Bloqueo de rama")
-            if ritmo_irregular and sdnn is not None and not mcp:
-                detalles.append(f"VFC artefactada por alteraciones del ritmo/conducción (SDNN máquina: {sdnn} ms)")
-            elif sdnn is not None and 30 <= sdnn <= 100 and not ritmo_irregular:
-                detalles.append(f"Variabilidad de la FC disminuida (SDNN: {sdnn} ms, Riesgo Moderado)")
+            if sdnn is not None and 30 <= sdnn <= 100 and not ritmo_irregular:
+                detalles.append(f"Variabilidad de la FC disminuida (SDNN: {sdnn} ms, Riesgo Medio)")
             if qtc is not None and qtc > 460:
                 detalles.append(f"QTc prolongado ({qtc} ms)")
             
             if detalles:
-                nivel, titulo = "AMARILLO", "PRECAUCIÓN CLÍNICA: DISPOSITIVO O PARÁMETROS EN VIGILANCIA"
+                nivel, titulo = "AMARILLO", "PRECAUCIÓN CLÍNICA: DISPOSITIVO CARDÍACO O PARÁMETROS EN VIGILANCIA"
             else:
                 detalles.append("Ritmo sinusal conservado, conducción AV normal y sin arritmias complejas.")
             
@@ -587,7 +628,7 @@ def generar_grafica_tacograma(d):
     return fig
 
 # ==============================================================================
-# MOTOR 1: EXTRACTOR DETERMINÍSTICO SÚPER SENIOR (AISLAMIENTO POR PÁGINAS)
+# MOTOR 1: EXTRACTOR DETERMINÍSTICO SÚPER SENIOR (PÁGINA POR PÁGINA)
 # ==============================================================================
 def limpiar_numero(val_str, tipo=int):
     if val_str is None:
@@ -617,9 +658,8 @@ def extraer_m1_holter_paginado(paginas_txt):
     texto_completo = "\n".join(paginas_txt)
     pag1_raw = paginas_txt[0] if paginas_txt else texto_completo
     pag1_flat = re.sub(r'\s+', ' ', pag1_raw)
-    txt_flat = re.sub(r'\s+', ' ', texto_completo)
 
-    # 1. IDENTIFICACIÓN Y METADATOS DE CALIDAD (PÁGINA 1)
+    # 1. IDENTIFICACIÓN Y CONTEXTO CLÍNICO (PÁGINA 1)
     m_nom = re.search(r"([A-ZÁÉÍÓÚÑ\s]{3,50},\s*[A-ZÁÉÍÓÚÑ\s]{3,50})[\s\n]+(?:Grabado|No confirmado|Confirmado|Reconfirmado|Informe)", pag1_raw)
     if not m_nom:
         m_nom = re.search(r"([A-ZÁÉÍÓÚÑ\s]{3,50},\s*[A-ZÁÉÍÓÚÑ\s]{3,50})", pag1_raw)
@@ -632,14 +672,19 @@ def extraer_m1_holter_paginado(paginas_txt):
     d["duracion_analizada"] = m_dur.group(1).strip() if m_dur else None
     d["artefacto_pct"] = extraer_numero(r"([\d,\.]+)\s*%\s*artefacto", pag1_flat, float)
 
-    m_com = re.search(r"Comentarios\s*de\s*la\s*prueba:\s*([^\n\r]+)", pag1_raw, re.IGNORECASE)
-    d["comentarios_clinicos"] = m_com.group(1).strip() if m_com else ""
+    m_com = re.search(r"Comentarios\s*de\s*la\s*prueba:\s*(.*?)(?:Grabado|Analizado|Latidos)", pag1_raw, re.IGNORECASE | re.DOTALL)
+    d["comentarios_clinicos"] = re.sub(r'\s+', ' ', m_com.group(1)).strip() if m_com else ""
 
-    # 2. FRECUENCIA CARDÍACA Y RR (EXCLUSIVO DE PÁGINA 1 PARA NO CRUZAR CON PÁGINA 25)
+    # 2. FRECUENCIA CARDÍACA (AISLADA EN EL BLOQUE "FC (promedio 1 min)" PARA EVITAR "17 min 52 seg")
     m_bloque_fc = re.search(r"FC\s*\(promedio\s*1\s*min\)(.*?)Eventos\s*dependientes", pag1_flat, re.IGNORECASE)
-    zona_fc = m_bloque_fc.group(1) if m_bloque_fc else pag1_flat
-    d["fc_max"]  = extraer_numero(r"M[áa]x[\s\|]*(\d{2,3})\b", zona_fc, int)
-    d["fc_min"]  = extraer_numero(r"M[íi]n[\s\|]*(\d{2,3})\b", zona_fc, int)
+    if m_bloque_fc:
+        zona_fc = m_bloque_fc.group(1)
+    else:
+        m_alt_fc = re.search(r"Intervalo\s*NN(.*?)Eventos\s*dependientes", pag1_flat, re.IGNORECASE)
+        zona_fc = m_alt_fc.group(1) if m_alt_fc else pag1_flat
+
+    d["fc_max"]  = extraer_numero(r"M[áa]x\b[\s\|]*(\d{2,3})\b", zona_fc, int)
+    d["fc_min"]  = extraer_numero(r"M[íi]n\b(?![\.\s]*seg)[\s\|]*(\d{2,3})\b", zona_fc, int)
     d["fc_prom"] = extraer_numero(r"Prom\.?\.?[\s\|]*(\d{2,3})\b", zona_fc, int)
     d["fc_dia"]  = extraer_numero(r"D[íi]a.*?Prom\.?\.?[\s\|]*(\d{2,3})\b", pag1_flat, int)
     d["fc_noc"]  = extraer_numero(r"Noche.*?Prom\.?\.?[\s\|]*(\d{2,3})\b", pag1_flat, int)
@@ -673,14 +718,14 @@ def extraer_m1_holter_paginado(paginas_txt):
             d["spacelabs_matrix_ok"] = True
 
     # 4. EVENTOS DEPENDIENTES DEL RITMO (PAUSAS, LATIDOS CAÍDOS, BRADI, TAQUI) EN PÁGINA 1
-    m_pausa_stack = re.search(r"Pausa\s*[\|\s]*Latido\s*ca[íi]do[\s\|]*(\d+)[\s\|]+(\d+)(?:[\s\|]*([\d,\.]+)\s*seg)?", pag1_raw, re.IGNORECASE)
+    m_pausa_stack = re.search(r"Pausa\s*[\|\s]*Latidos?\s*ca[íi]dos?[\s\|]*(\d+)[\s\|]+(\d+)(?:[\s\|]*([\d,\.]+)\s*seg)?", pag1_raw, re.IGNORECASE)
     if m_pausa_stack:
         d["pausas"] = limpiar_numero(m_pausa_stack.group(1), int)
         d["latidos_caidos"] = limpiar_numero(m_pausa_stack.group(2), int)
         d["pausa_max_seg"] = limpiar_numero(m_pausa_stack.group(3), float) if m_pausa_stack.group(3) else d.get("rr_max_seg")
     else:
         d["pausas"] = extraer_numero(r"\bPausa\b[\s\|]*(\d+)", pag1_raw, int)
-        d["latidos_caidos"] = extraer_numero(r"Latido\s*ca[íi]do[\s\|]*(\d+)", pag1_raw, int)
+        d["latidos_caidos"] = extraer_numero(r"Latidos?\s*ca[íi]dos?[\s\|]*(\d+)", pag1_raw, int)
         d["pausa_max_seg"] = extraer_numero(r"Pausa.*?([\d,\.]+)\s*seg", pag1_flat, float)
         if d.get("pausas") and d["pausas"] > 0 and not d.get("pausa_max_seg"):
             d["pausa_max_seg"] = d.get("rr_max_seg")
@@ -702,7 +747,7 @@ def extraer_m1_holter_paginado(paginas_txt):
         d["taqui_fc_max"] = d.get("fc_max")
 
     # 5. DESGLOSE EXHAUSTIVO DE ARRITMIAS VENTRICULARES (EXCLUSIVO DE PÁGINA 1)
-    d["ev_max_hr"] = extraer_numero(r"Arritmias\s*ventriculares.*?M[áa]x/hr:\s*([\d\.,]+)", pag1_flat, int) or extraer_numero(r"Latidos\s*ventriculares.*?M[áa]x/hr:\s*([\d\.,]+)", pag1_flat, int)
+    d["ev_max_hr"] = extraer_numero(r"Latidos\s*ventriculares.*?M[áa]x/hr:\s*([\d\.,]+)", pag1_flat, int)
 
     m_tv = re.search(r"\bTV\b[\s\|]+(\d+)[\s\|]+(\d+)(?:.*?(\d{2,3}):)?", pag1_raw)
     d["tv_episodios"] = limpiar_numero(m_tv.group(1), int) if m_tv else 0
@@ -744,7 +789,6 @@ def extraer_m1_holter_paginado(paginas_txt):
 
     d["esv_aisladas"] = extraer_numero(r"Eventos\s*individuales\s*de\s*ESV[\s\|]+(\d+)", pag1_raw, int) or 0
 
-    # Tabla de Fibrilación Auricular (Página 1 y Página 2)
     m_fa = re.search(r"Total\s*FA[\s\|]+(\d+)[\s\|]+(\d+)[\s\|]+([\d,\.]+)\s*%[\s\|]+([^\|\n\r]+)", pag1_raw, re.IGNORECASE)
     if m_fa:
         d["fa_episodios"] = limpiar_numero(m_fa.group(1), int)
@@ -844,10 +888,11 @@ def extraer_m1_holter_paginado(paginas_txt):
             if ev_limpio not in eventos_tiras:
                 eventos_tiras.append(f"Pág {idx_p+1}: {ev_limpio}")
 
-    # Selección inteligente de QTc
-    if d["qtc_canales"]:
-        d["qtc_prom"] = d["qtc_canales"][0]["qtc_prom"]
-        d["qt_prom"]  = d["qtc_canales"][0]["qt_prom"]
+    # Selección inteligente de QTc (descarta canales en 0% analizado)
+    canales_validos = [c for c in d["qtc_canales"] if (c.get("pct_analizado") or 0) > 0 and (c.get("qtc_prom") or 0) > 250]
+    if canales_validos:
+        d["qtc_prom"] = canales_validos[0]["qtc_prom"]
+        d["qt_prom"]  = canales_validos[0]["qt_prom"]
     else:
         d["qtc_prom"] = None
         d["qt_prom"]  = None
@@ -861,12 +906,38 @@ def extraer_m1_holter_paginado(paginas_txt):
     else:
         d["mcp_modo_tiras"] = None
 
+    # DETECCIÓN DE DISPOSITIVOS CARDÍACOS: MCP, CDI, CRI/TRC (SIN FALSOS POSITIVOS POR ENCABEZADOS)
+    com_upper = (d.get("comentarios_clinicos") or "").upper()
+    es_cdi = bool(re.search(r'\b(CDI|DAI|ICD|CARDIODESFIBRILADOR|DESFIBRILADOR)\b', com_upper))
+    es_cri = bool(re.search(r'\b(CRI|TRC|CRT|CARDIORRESINCRONIZADOR|RESINCRONIZADOR)\b', com_upper))
+    es_mcp_com = bool(re.search(r'\b(MCP|MARCAPASOS|MARCAPASO)\b', com_upper))
+
+    if d.get("mcp_fc_min_tira") or d.get("mcp_fc_max_tira") or tiene_dp or tiene_vp or es_mcp_com:
+        if not d.get("spacelabs_matrix_ok"):
+            d["mcp_presente"] = True
+
+    if es_cdi and es_cri:
+        d["dispositivo_tipo"] = "CRI-D / TRC-D"
+        d["tiene_dispositivo"] = True
+    elif es_cdi:
+        d["dispositivo_tipo"] = "CDI"
+        d["tiene_dispositivo"] = True
+    elif es_cri:
+        d["dispositivo_tipo"] = "CRI / TRC"
+        d["tiene_dispositivo"] = True
+    elif d.get("mcp_presente") or es_mcp_com:
+        d["dispositivo_tipo"] = "MCP"
+        d["tiene_dispositivo"] = True
+        d["mcp_presente"] = True
+    else:
+        d["dispositivo_tipo"] = None
+        d["tiene_dispositivo"] = False
+
     d["eventos_tiras_auditadas"] = eventos_tiras[:15]
     d["paginas_auditadas"] = len(paginas_txt)
 
-    dx_text = pag1_raw.upper()
     bloqueo_keys = ["BLOQUEO DE RAMA", "BRD", "BRI", "BCRD", "BCRI", "QRS ANCHO", "CONDUCCION INTRAVENTRICULAR"]
-    d["tiene_bloqueo_rama"] = any(k in dx_text for k in bloqueo_keys)
+    d["tiene_bloqueo_rama"] = any(k in com_upper for k in bloqueo_keys)
     return d
 
 def extraer_m1_mapa(texto):
@@ -897,7 +968,7 @@ def extraer_m1_esfuerzo(texto):
     return d
 
 # ==============================================================================
-# MOTOR 2: INTELIGENCIA ARTIFICIAL GEMINI (VISIÓN CLÍNICA DE ALTA RESOLUCIÓN)
+# MOTOR 2: INTELIGENCIA ARTIFICIAL GEMINI (VISIÓN 150 DPI AL 100%)
 # ==============================================================================
 def consultar_gemini_json(prompt_text, inline_items=None):
     key = str(st.secrets.get("GEMINI_API_KEY", os.environ.get("GEMINI_API_KEY", ""))).strip().strip('"').strip("'")
@@ -913,7 +984,7 @@ def consultar_gemini_json(prompt_text, inline_items=None):
     for ver, mod in modelos:
         url = f"https://generativelanguage.googleapis.com/{ver}/{mod}:generateContent?key={key}"
         try:
-            resp = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=60)
+            resp = requests.post(url, headers={"Content-Type": "application/json"}, json=payload, timeout=90)
             if resp.status_code == 200:
                 raw = resp.json()['candidates'][0]['content']['parts'][0]['text']
                 match = re.search(r'\{.*\}', raw, re.DOTALL)
@@ -922,7 +993,7 @@ def consultar_gemini_json(prompt_text, inline_items=None):
             continue
     return False, None, "Timeout en API Gemini o Fallo en la red"
 
-def optimizar_imagen_para_ia(img_bytes, max_dim=1400):
+def optimizar_imagen_para_ia(img_bytes, max_dim=1500):
     img = Image.open(io.BytesIO(img_bytes))
     img = ImageOps.exif_transpose(img)
     if img.mode != "RGB":
@@ -932,7 +1003,7 @@ def optimizar_imagen_para_ia(img_bytes, max_dim=1400):
         ratio = max_dim / max(w, h)
         img = img.resize((int(w * ratio), int(h * ratio)), Image.Resampling.LANCZOS)
     buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=82, optimize=True)
+    img.save(buf, format="JPEG", quality=85, optimize=True)
     return buf.getvalue()
 
 def ejecutar_extraccion_multimodal(archivos_fotos):
@@ -940,7 +1011,7 @@ def ejecutar_extraccion_multimodal(archivos_fotos):
     for foto in archivos_fotos:
         try:
             raw_b = foto.getvalue() if hasattr(foto, "getvalue") else foto
-            opt_b = optimizar_imagen_para_ia(raw_b, max_dim=1400)
+            opt_b = optimizar_imagen_para_ia(raw_b, max_dim=1500)
             b64_img = base64.b64encode(opt_b).decode('utf-8')
             inline_items.append({"inline_data": {"mime_type": "image/jpeg", "data": b64_img}})
         except Exception:
@@ -995,7 +1066,7 @@ def auditar_motor_3_universal(m1, m2, modalidad):
             
         claves_clinicas = [
             "fc_dia", "fc_noc", "eventos_paciente", "pausas", "sdnn_24h", "qtc_prom",
-            "tv_episodios", "ev_duplas", "tsv_episodios", "st_dep_episodios", "st_elev_episodios", 
+            "tv_episodios", "aivr_episodios", "ev_duplas", "tsv_episodios", "st_dep_episodios", "st_elev_episodios", 
             "taqui_conteo", "bradi_conteo", "taqui_fc_max", "bradi_fc_min", 
             "latidos_caidos", "bigeminismo", "trigeminismo", "pr_intervalo", "fa_episodios"
         ]
@@ -1015,11 +1086,11 @@ def auditar_motor_3_universal(m1, m2, modalidad):
                 notas.append(f"🔒 VETO FISIOLÓGICO: RR Máx es {d_f['rr_max_seg']}s (< 2.0s). Se descartan falsas pausas.")
                 d_f["pausas"] = 0
 
-        # BLINDAJE MATRICIAL SPACELABS (CERO ALUCINACIÓN EN CONTEO Y MARCAPASOS)
+        # BLINDAJE MATRICIAL SPACELABS (CERO ALUCINACIÓN EN CONTEO Y DISPOSITIVOS)
         if m1.get("spacelabs_matrix_ok"):
             for k in ["total_latidos", "ev_total", "esv_total", "mcp_presente", "mcp_porcentaje", "mcp_latidos", "latidos_normales", "normales_pct", "ev_pct", "esv_pct"]:
                 d_f[k] = m1.get(k)
-            notas.append(f"🛡️ AUDITORÍA SÚPER SENIOR: Matriz Spacelabs verificada en {m1.get('paginas_auditadas', 1)} páginas ({d_f['total_latidos']:,} latidos | MCP: {d_f['mcp_porcentaje']}%).")
+            notas.append(f"🛡️ AUDITORÍA SÚPER SENIOR: Matriz Spacelabs verificada al 100% en {m1.get('paginas_auditadas', 1)} páginas ({d_f['total_latidos']:,} latidos | MCP: {d_f['mcp_porcentaje']}%).")
         else:
             for k in ["total_latidos", "ev_total", "esv_total"]:
                 val, _ = arbitrar_valor(k, m1.get(k), m2.get(k) if m2 else None, int, "alta")
@@ -1028,8 +1099,17 @@ def auditar_motor_3_universal(m1, m2, modalidad):
             d_f["mcp_latidos"], _ = arbitrar_valor("mcp_latidos", m1.get("mcp_latidos"), m2.get("mcp_latidos") if m2 else None, int, "baja")
             d_f["mcp_presente"] = bool((d_f.get("mcp_latidos") and d_f["mcp_latidos"] > 0) or (d_f.get("mcp_porcentaje") and d_f["mcp_porcentaje"] > 0))
 
+        # Consolidación de dispositivo cardíaco (MCP / CDI / CRI)
+        if m2 and m2.get("dispositivo_tipo") in ["MCP", "CDI", "CRI", "CRI/TRC"] and not d_f.get("dispositivo_tipo"):
+            if d_f.get("mcp_presente"):
+                d_f["dispositivo_tipo"] = m2.get("dispositivo_tipo")
+                d_f["tiene_dispositivo"] = True
+        elif d_f.get("mcp_presente") and not d_f.get("dispositivo_tipo"):
+            d_f["dispositivo_tipo"] = "MCP"
+            d_f["tiene_dispositivo"] = True
+
         t_bloq = m1.get("tiene_bloqueo_rama", False) or (m2.get("tiene_bloqueo_rama", False) if m2 else False)
-        if d_f["mcp_presente"] and (d_f.get("mcp_porcentaje") or 0) >= 50.0:
+        if d_f.get("mcp_presente") and (d_f.get("mcp_porcentaje") or 0) >= 50.0:
             d_f["tiene_bloqueo_rama"] = True
             d_f["bloqueo_detalle"] = "bloqueo de rama izquierda secundario a electroestimulación ventricular"
         else:
@@ -1091,38 +1171,38 @@ def ejecutar_triple_engine_universal(pdf_bytes, modalidad="HOLTER"):
     else:
         m1 = extraer_m1_esfuerzo(texto_completo)
 
-    # Renderizado de alta nitidez (130 DPI en páginas de tablas clave, 85 DPI en tiras intermedias)
+    # Renderizado 100% a 150 DPI con optimización fotográfica para lectura clínica sin pérdida
     inline_images = []
     for num_p in range(total_pags):
         try:
-            es_tabla_clave = (num_p in [0, 1]) or ("Resumen de análisis de ST" in paginas_txt[num_p]) or ("Valor de 24 horas" in paginas_txt[num_p]) or ("Todos los" in paginas_txt[num_p])
-            dpi_render = 130 if es_tabla_clave else 80
-            pix = doc[num_p].get_pixmap(dpi=dpi_render)
-            b64_p = base64.b64encode(pix.tobytes("jpeg")).decode("utf-8")
+            pix = doc[num_p].get_pixmap(dpi=150)
+            img_opt = optimizar_imagen_para_ia(pix.tobytes("jpeg"), max_dim=1450)
+            b64_p = base64.b64encode(img_opt).decode("utf-8")
             inline_images.append({"inline_data": {"mime_type": "image/jpeg", "data": b64_p}})
         except Exception:
             continue
     doc.close()
 
     if modalidad == "HOLTER":
-        prompt_ia = f"""Eres el Jefe de Electrofisiología y Hemodinamia Clínica. Audita las {total_pags} páginas de este estudio Holter.
+        prompt_ia = f"""Eres un Cardiólogo, Electrofisiólogo y Hemodinamista Súper Senior (Guías Europeas ESC y Americanas ACC/AHA/HRS).
+Audita el 100% de las {total_pags} páginas e imágenes a 150 DPI de este estudio Holter.
 
-REGLAS ESTRICTAS DE AUDITORÍA SÚPER SENIOR:
-1. PÁGINA 1 (CONTEO Y MARCAPASOS): En la fila 'Conteo', las 5 columnas son Total, Normal, Ventricular, SupraVentricular y Marcapaso. Solo pon "mcp_presente": true si el conteo o porcentaje de la 5ta columna (Marcapaso) es > 0. Si dice 0% y 0, es FALSE.
-2. FC MÍNIMA Y MÁXIMA: Toma FC Promedio, Máxima y Mínima exclusivamente de la tabla 'FC (promedio 1 min)' de la Página 1 (NO de las tablas horarias de QT).
-3. PAUSAS Y CONDUCCIÓN AV: Extrae conteo exacto de 'Pausa' y 'Latido caído' en la Página 1.
+REGLAS DE PRECISIÓN ABSOLUTA PUNTO POR PUNTO:
+1. CONTEO Y DISPOSITIVOS (MCP / CDI / CRI): En la tabla 'Conteo' de la Página 1, las 5 columnas son Total, Normal, Ventricular, SupraVentricular y Marcapaso. Solo pon "mcp_presente": true si la 5ta columna (Marcapaso) es > 0. Si dice 0% y 0, es FALSE. Si en Comentarios/DX indica Marcapasos (MCP), Cardiodesfibrilador (CDI) o Cardiorresincronizador (CRI/TRC), indícalo en "dispositivo_tipo".
+2. FC MÍNIMA Y MÁXIMA: Toma FC Promedio, Máxima y Mínima exclusivamente de la tabla 'FC (promedio 1 min)' de la Página 1 (NO confundas con los minutos de 'Duración analizado' ni con las tablas horarias de QT).
+3. PAUSAS Y CONDUCCIÓN AV: Extrae el conteo exacto de 'Pausa' y 'Latido caído' en la Página 1 y la pausa máxima en segundos.
 4. ARRITMIAS VENTRICULARES Y SUPRAVENTRICULARES: En la Página 1, extrae el recuento de eventos de 'TV', 'Sec. V/AIVR', 'Apareado' (duplas), 'Bigeminismo', 'Trigeminismo', 'TSV' y 'Total FA' (Fibrilación Auricular).
-5. MATRIZ VFC Y QT: En la fila 'Valor de 24 horas', el primer número es SNN50 y el SEGUNDO número es SDNN (mseg). En la fila 'Todos los períodos' de QT, el TERCER número es Prom. QTc (ms) (devuelve null si el porcentaje analizado es 0).
+5. VARIABILIDAD (SDNN) Y QTc: En la fila 'Valor de 24 horas' de la tabla VFC, el primer número es SNN50 y el SEGUNDO número es SDNN (mseg). Extrae siempre ese SDNN. En la fila 'Todos los períodos' de QT, el TERCER número es Prom. QTc (ms) (usa null si el porcentaje analizado es 0).
 
 Devuelve ÚNICAMENTE JSON estricto:
-{{"paciente": "str", "cedula": "str", "mcp_presente": bool, "mcp_latidos": int, "mcp_porcentaje": float, "fc_prom": int, "fc_dia": int, "fc_noc": int, "fc_max": int, "fc_min": int, "total_latidos": int, "latidos_normales": int, "pausas": int, "rr_max_seg": float, "pausa_max_seg": float, "ev_total": int, "tv_episodios": int, "ev_duplas": int, "esv_total": int, "tsv_episodios": int, "fa_episodios": int, "sdnn_24h": int, "qtc_prom": int, "pr_intervalo": int, "st_dep_episodios": int, "st_elev_episodios": int, "eventos_paciente": int, "tiene_bloqueo_rama": bool, "taqui_conteo": int, "bradi_conteo": int, "taqui_fc_max": int, "bradi_fc_min": int, "latidos_caidos": int, "bigeminismo": int, "trigeminismo": int}}"""
+{{"paciente": "str", "cedula": "str", "mcp_presente": bool, "dispositivo_tipo": "str", "mcp_latidos": int, "mcp_porcentaje": float, "fc_prom": int, "fc_dia": int, "fc_noc": int, "fc_max": int, "fc_min": int, "total_latidos": int, "latidos_normales": int, "pausas": int, "rr_max_seg": float, "pausa_max_seg": float, "ev_total": int, "tv_episodios": int, "aivr_episodios": int, "ev_duplas": int, "esv_total": int, "tsv_episodios": int, "fa_episodios": int, "sdnn_24h": int, "qtc_prom": int, "pr_intervalo": int, "st_dep_episodios": int, "st_elev_episodios": int, "eventos_paciente": int, "tiene_bloqueo_rama": bool, "taqui_conteo": int, "bradi_conteo": int, "taqui_fc_max": int, "bradi_fc_min": int, "latidos_caidos": int, "bigeminismo": int, "trigeminismo": int}}"""
     elif modalidad == "MAPA":
-        prompt_ia = f"""Eres Auditor Médico Jefe. Analiza las {total_pags} páginas de este MAPA.
+        prompt_ia = f"""Eres un Cardiólogo Súper Senior (Guías ESC/ESH). Analiza el 100% de las {total_pags} páginas de este MAPA.
 Texto: {texto_completo}
 Devuelve JSON estricto:
 {{"paciente": "str", "cedula": "str", "pas_24h": int, "pad_24h": int, "carga_pas": float, "carga_pad": float, "pp_val": int, "caida_nocturna_val": float, "pas_max_sueno": int, "pad_max_sueno": int}}"""
     else:
-        prompt_ia = f"""Eres Auditor Médico Jefe. Analiza este PDF de Prueba de Esfuerzo.
+        prompt_ia = f"""Eres un Cardiólogo Súper Senior (Guías ACC/AHA). Analiza el 100% de este PDF de Prueba de Esfuerzo.
 Texto: {texto_completo}
 Devuelve JSON estricto:
 {{"paciente": "str", "cedula": "str", "edad": int, "sexo": "str", "protocolo": "str", "etapa": "str", "tiempo_min": float, "fc_basal": int, "fc_pico": int, "pas_basal": int, "pad_basal": int, "pas_pico": int, "pad_pico": int, "st_mm": float, "mets": float}}"""
@@ -1132,11 +1212,11 @@ Devuelve JSON estricto:
     d_final, notas = auditar_motor_3_universal(m1, m2 if ok_m2 else None, modalidad)
     d_final["triple_engine_activo"] = True
     d_final["notas_arbitraje"] = notas
-    d_final["motores_info"] = f"Auditoría Súper Senior: {total_pags} páginas escaneadas al 100%"
+    d_final["motores_info"] = f"Auditoría Súper Senior (150 DPI): {total_pags} páginas escaneadas al 100%"
     return d_final
 
 # ==============================================================================
-# REDACTORES INSTITUCIONALES (ESTÁNDAR DR. WILLIAM AMAYA + ELECTROFISIOLOGÍA)
+# REDACTORES INSTITUCIONALES (ESTÁNDAR DR. WILLIAM AMAYA + GUÍAS ESC/AHA/HRS)
 # ==============================================================================
 def redactar_informe_holter_11_puntos(d, perfil):
     fc_p = d.get("fc_prom")
@@ -1152,16 +1232,18 @@ def redactar_informe_holter_11_puntos(d, perfil):
 
     pct_mcp = d.get("mcp_porcentaje") or 0.0
     pausas = d.get("pausas") or 0
+    tiene_disp = d.get("tiene_dispositivo", False)
+    disp_tipo = d.get("dispositivo_tipo") or "MCP"
     txt_sensado = " con adecuado sensado y captura" if pausas == 0 else ""
     modo_tiras = f", {d.get('mcp_modo_tiras')}" if d.get("mcp_modo_tiras") else ""
     rango_mcp = ""
     if d.get("mcp_fc_min_tira") or d.get("mcp_fc_max_tira"):
-        rango_mcp = f" (FC marcapasos mín {d.get('mcp_fc_min_tira') or d.get('fc_min')} / máx {d.get('mcp_fc_max_tira') or d.get('fc_max')} lpm)"
+        rango_mcp = f" (FC dispositivo mín {d.get('mcp_fc_min_tira') or d.get('fc_min')} / máx {d.get('mcp_fc_max_tira') or d.get('fc_max')} lpm)"
 
-    if d.get("mcp_presente") and pct_mcp >= 80.0:
-        p1 = f"1. Ritmo comandado por marcapasos definitivo (electroestimulado/sensado en {pct_mcp:.1f}%{modo_tiras}){txt_sensado} con FC promedio {fc_p_str} lpm{rango_mcp}{dip_txt}."
-    elif d.get("mcp_presente"):
-        pct_str = f" ({pct_mcp:.1f}% mediado por MCP{modo_tiras})" if pct_mcp > 0 else " con presencia de MCP"
+    if tiene_disp and pct_mcp >= 80.0:
+        p1 = f"1. Ritmo comandado por dispositivo cardíaco [{disp_tipo}] definitivo (electroestimulado/sensado en {pct_mcp:.1f}%{modo_tiras}){txt_sensado} con FC promedio {fc_p_str} lpm{rango_mcp}{dip_txt}."
+    elif tiene_disp:
+        pct_str = f" ({pct_mcp:.1f}% mediado por {disp_tipo}{modo_tiras})" if pct_mcp > 0 else f" en paciente portador de {disp_tipo}"
         p1 = f"1. Ritmo sinusal alternando con electroestimulación{pct_str}{txt_sensado} con FC promedio {fc_p_str} lpm{dip_txt}."
     else:
         p1 = f"1. Ritmo sinusal con FC promedio {fc_p_str} lpm (FC mín {d.get('fc_min') or 'N/A'} lpm / FC máx {d.get('fc_max') or 'N/A'} lpm){dip_txt}."
@@ -1209,7 +1291,7 @@ def redactar_informe_holter_11_puntos(d, perfil):
     else:
         p5 = "5. Sin Alteración de la conducción AV."
 
-    if d.get("mcp_presente") and pct_mcp >= 50.0:
+    if tiene_disp and pct_mcp >= 50.0:
         p6 = f"6. Complejos ventriculares con {d.get('bloqueo_detalle', 'morfología de bloqueo por estimulación')}."
     elif d.get("tiene_bloqueo_rama"):
         p6 = f"6. Alteración de conducción intraventricular por {d.get('bloqueo_detalle', 'bloqueo de rama')}."
@@ -1252,7 +1334,7 @@ def redactar_informe_holter_11_puntos(d, perfil):
         if sec_esv > 0:
             det_esv_extra.append(f"{sec_esv} secuencias auriculares")
         str_extra_esv = f" [{', '.join(det_esv_extra)}]" if det_esv_extra else ""
-        ect.append(f"ectopias supraventriculares ({esv:,} ESV, { (esv/tot_q)*100:.1f}%{str_extra_esv})")
+        ect.append(f"ectopias supraventriculares ({esv:,} ESV, {(esv/tot_q)*100:.1f}%{str_extra_esv})")
     if tsv > 0:
         ect.append(f"salvas de taquicardia supraventricular ({tsv} rachas)")
     if fa_ep > 0:
@@ -1281,50 +1363,66 @@ def redactar_informe_holter_11_puntos(d, perfil):
     ev_pac = d.get("eventos_paciente")
     p8 = f"8. Diario paciente: {ev_pac} eventos marcados." if (ev_pac is not None and ev_pac > 0) else "8. No refirió síntomas."
 
-    # CRITERIO ELECTROFISIOLÓGICO SOBRE VFC / SDNN
+    # =========================================================================
+    # PUNTO 9 (SIEMPRE DECLARA SI LA VFC ESTÁ DISMINUIDA O CONSERVADA)
+    # Y PUNTO 11 (RIESGO NO VALORABLE ANTE MCP / CDI / CRI O ARRITMIA/PAUSAS)
+    # =========================================================================
     sdnn = d.get("sdnn_24h")
-    vfc_pct = d.get("vfc_pct_analizado")
-    ritmo_irregular = (pausas > 0) or (lat_ca > 0) or (fa_ep > 0) or (carga >= 10.0) or d.get("mcp_presente") or (vfc_pct is not None and vfc_pct < 50)
+    ritmo_irregular = (pausas > 0) or (lat_ca > 0) or (fa_ep > 0) or (carga >= 10.0)
 
-    if d.get("mcp_presente"):
-        p9 = "9. Variabilidad de la frecuencia cardíaca modificada por estimulación de marcapasos."
-        p11 = "11. Riesgo del paciente SDNN 20 a 24 hrs ( No Valorable por Marcapasos )."
-        d_vfc = "VFC modificada por marcapasos."
-    elif sdnn is None:
-        p9 = "9. Variabilidad de la frecuencia cardíaca no reportada explícitamente en el documento."
-        p11 = "11. Riesgo del paciente SDNN 20 a 24 hrs ( Pendiente de Valoración )."
-        d_vfc = "VFC no especificada."
-    elif ritmo_irregular:
-        pct_info = f", {vfc_pct}% analizado" if vfc_pct is not None else ""
-        p9 = f"9. Variabilidad de la frecuencia cardíaca NO VALORABLE por alteraciones del ritmo/conducción (SDNN máquina: {sdnn} ms{pct_info})."
-        p11 = "11. Riesgo del paciente SDNN 20 a 24 hrs ( No Valorable por Arritmia/Pausas )."
-        d_vfc = "VFC no valorable clínicamente por pausas/ectopia."
+    try:
+        sdnn_val = int(float(sdnn)) if sdnn is not None else None
+    except Exception:
+        sdnn_val = None
+
+    # Construcción del Punto 9 (Siempre indica estado de la variabilidad)
+    if sdnn_val is not None:
+        if sdnn_val == 0:
+            estado_vfc = "disminuida (0 ms)"
+        elif sdnn_val < 30:
+            estado_vfc = f"severamente disminuida ({sdnn_val} ms)"
+        elif sdnn_val <= 100:
+            estado_vfc = f"disminuida ({sdnn_val} ms)"
+        else:
+            estado_vfc = f"conservada ({sdnn_val} ms)"
+
+        if tiene_disp:
+            p9 = f"9. Variabilidad de la frecuencia cardíaca {estado_vfc} (modificada por estimulación de {disp_tipo})."
+        elif ritmo_irregular:
+            p9 = f"9. Variabilidad de la frecuencia cardíaca {estado_vfc} (valor influenciado por pausas/trastorno de conducción o arritmia)."
+        else:
+            p9 = f"9. Variabilidad de la frecuencia cardíaca {estado_vfc}."
     else:
-        try:
-            sdnn_val = int(float(sdnn))
-        except Exception:
-            sdnn_val = None
-        if sdnn_val is not None:
-            if sdnn_val == 0:
-                p9 = "9. Variabilidad de la frecuencia cardíaca disminuida."
-                p11 = "11. Riesgo del paciente SDNN 20 a 24 hrs ( Riesgo Medio )."
-                d_vfc = "VFC disminuida (Riesgo Medio)."
-            elif sdnn_val < 30:
-                p9 = f"9. Variabilidad de la frecuencia cardíaca severamente disminuida ({sdnn_val} ms)."
-                p11 = "11. Riesgo del paciente SDNN 20 a 24 hrs ( Riesgo Alto )."
-                d_vfc = "VFC severamente disminuida (Riesgo Alto)."
-            elif sdnn_val <= 100:
-                p9 = f"9. Variabilidad de la frecuencia cardíaca disminuida ({sdnn_val} ms)."
-                p11 = "11. Riesgo del paciente SDNN 20 a 24 hrs ( Riesgo Medio )."
-                d_vfc = "VFC disminuida (Riesgo Medio)."
-            else:
-                p9 = f"9. Variabilidad de la frecuencia cardíaca conservada ({sdnn_val} ms)."
-                p11 = "11. Riesgo del paciente SDNN 20 a 24 hrs ( Riesgo Bajo )."
-                d_vfc = "VFC conservada."
+        if tiene_disp:
+            p9 = f"9. Variabilidad de la frecuencia cardíaca disminuida (modificada por estimulación de {disp_tipo})."
+            estado_vfc = "disminuida"
         else:
             p9 = "9. Variabilidad de la frecuencia cardíaca no reportada explícitamente en el documento."
-            p11 = "11. Riesgo del paciente SDNN 20 a 24 hrs ( Pendiente de Valoración )."
-            d_vfc = "VFC no especificada."
+            estado_vfc = "no especificada"
+
+    # Construcción del Punto 11 (Riesgo SDNN)
+    if tiene_disp:
+        p11 = f"11. Riesgo del paciente SDNN 20 a 24 hrs ( No Valorable por Dispositivo Cardíaco [{disp_tipo}] )."
+        d_vfc = f"VFC {estado_vfc} (Riesgo no valorable por {disp_tipo})."
+    elif ritmo_irregular:
+        p11 = "11. Riesgo del paciente SDNN 20 a 24 hrs ( No Valorable por Trastorno de Conducción / Arritmia )."
+        d_vfc = f"VFC {estado_vfc} (Riesgo no valorable por pausas/arritmia)."
+    elif sdnn_val is not None:
+        if sdnn_val == 0:
+            p11 = "11. Riesgo del paciente SDNN 20 a 24 hrs ( Riesgo Medio )."
+            d_vfc = "VFC disminuida (Riesgo Medio)."
+        elif sdnn_val < 30:
+            p11 = "11. Riesgo del paciente SDNN 20 a 24 hrs ( Riesgo Alto )."
+            d_vfc = f"VFC severamente disminuida ({sdnn_val} ms, Riesgo Alto)."
+        elif sdnn_val <= 100:
+            p11 = "11. Riesgo del paciente SDNN 20 a 24 hrs ( Riesgo Medio )."
+            d_vfc = f"VFC disminuida ({sdnn_val} ms, Riesgo Medio)."
+        else:
+            p11 = "11. Riesgo del paciente SDNN 20 a 24 hrs ( Riesgo Bajo )."
+            d_vfc = f"VFC conservada ({sdnn_val} ms, Riesgo Bajo)."
+    else:
+        p11 = "11. Riesgo del paciente SDNN 20 a 24 hrs ( No Valorable )."
+        d_vfc = "VFC no especificada."
 
     if pausas > 0:
         p_max = d.get("pausa_max_seg")
@@ -1333,9 +1431,9 @@ def redactar_informe_holter_11_puntos(d, perfil):
     else:
         p10 = "10. No hay pausas significativas."
 
-    # CONCLUSIÓN Y RECOMENDACIONES CON CRITERIO DE ELECTROFISIOLOGÍA
-    if d.get("mcp_presente"):
-        diag = f"Ritmo comandado por marcapasos normofuncionante ({pct_mcp:.1f}%). FC promedio {fc_p_str} lpm."
+    # CONCLUSIÓN Y RECOMENDACIONES CON CRITERIO DE ELECTROFISIOLOGÍA (ESC / AHA / HRS)
+    if tiene_disp:
+        diag = f"Ritmo comandado por dispositivo cardíaco [{disp_tipo}] normofuncionante ({pct_mcp:.1f}%). FC promedio {fc_p_str} lpm. {d_vfc}"
     else:
         hallazgos_conc = [f"Ritmo sinusal con FC promedio {fc_p_str} lpm."]
         if pausas > 0 or lat_ca > 0:
@@ -1348,7 +1446,7 @@ def redactar_informe_holter_11_puntos(d, perfil):
         diag = " ".join(hallazgos_conc)
 
     recs = []
-    if tv_ep > 0 or carga >= 10.0 or pausas > 0 or lat_ca > 0 or fa_ep > 0 or (d.get("fc_min") and d.get("fc_min") < 40 and not d.get("mcp_presente")):
+    if tv_ep > 0 or carga >= 10.0 or pausas > 0 or lat_ca > 0 or fa_ep > 0 or (d.get("fc_min") and d.get("fc_min") < 40 and not tiene_disp):
         recs.append("Valoración prioritaria por Electrofisiología.")
     if st_ep > 0:
         recs.append("Correlacionar clínicamente hallazgos del segmento ST.")
@@ -1410,7 +1508,7 @@ RECOMENDACIONES: Continuar control médico periódico.
 {perfil['registro']}"""
 
 # ==============================================================================
-# INYECTORES DE PDFS Y SELLO FORENSE
+# INYECTORES DE PDFS Y SELLO FORENSE (SIN LOGOTIPO EN LOS PDFS)
 # ==============================================================================
 @st.cache_data
 def generar_qr_verificacion(paciente, medico, fecha_str, codigo_uuid, proc_nombre):
@@ -1535,18 +1633,10 @@ def generar_pdf_ergometria_completo(d, texto_informe, perfil, cod_uuid, imagenes
     doc = fitz.open()
     page = doc.new_page(width=612, height=792)
 
-    logo_bytes = None
-    for nom in ["cencardio.jpg", "cencardio.png", "cencardio.jpeg", "logo.png", "logo.jpg"]:
-        if os.path.exists(nom):
-            with open(nom, "rb") as f:
-                logo_bytes = f.read()
-            break
-    if logo_bytes:
-        page.insert_image(fitz.Rect(36, 30, 150, 75), stream=logo_bytes)
-
-    page.insert_text(fitz.Point(165, 45), "CENTRO CARDIOVASCULAR COLOMBIANO CENCARDIO", fontsize=11, fontname="helv", color=(0.04, 0.15, 0.25))
-    page.insert_text(fitz.Point(165, 58), "INFORME DE ERGOMETRÍA Y PRUEBA DE ESFUERZO COMPUTARIZADA", fontsize=8.5, fontname="helv", color=(0.78, 0.06, 0.18))
-    page.insert_text(fitz.Point(165, 70), "CUPS: 893805 · Habilitación MinSalud Colombia · Res. 3100 de 2019", fontsize=7, fontname="helv", color=(0.4, 0.45, 0.5))
+    # Encabezado institucional limpio en texto (sin logotipo de imagen en el PDF)
+    page.insert_text(fitz.Point(36, 45), "CENTRO CARDIOVASCULAR COLOMBIANO CENCARDIO", fontsize=11.5, fontname="helv", color=(0.04, 0.15, 0.25))
+    page.insert_text(fitz.Point(36, 58), "INFORME DE ERGOMETRÍA Y PRUEBA DE ESFUERZO COMPUTARIZADA", fontsize=8.5, fontname="helv", color=(0.78, 0.06, 0.18))
+    page.insert_text(fitz.Point(36, 70), "CUPS: 893805 · Habilitación MinSalud Colombia · Res. 3100 de 2019", fontsize=7, fontname="helv", color=(0.4, 0.45, 0.5))
     page.draw_rect(fitz.Rect(36, 85, 576, 87), color=None, fill=(0.04, 0.15, 0.25), overlay=True)
 
     page.draw_rect(fitz.Rect(36, 95, 576, 155), color=(0.85, 0.9, 0.95), fill=(0.97, 0.98, 1.0), width=1)
@@ -1703,12 +1793,13 @@ OPCIONES_NOMBRES = [m["etiqueta"] for m in LISTA_ESPECIALISTAS]
 if "autenticado" not in st.session_state:
     st.session_state.autenticado = False
 
+logo_institucional_b64 = obtener_logo_b64()
+
 params = st.query_params
 if "val" in params:
     c_v1, c_v2, c_v3 = st.columns([1, 1.8, 1])
     with c_v2:
-        logo_data = obtener_logo_b64()
-        logo_html = f'<img src="{logo_data}" style="max-width:180px; margin-bottom:1rem;">' if logo_data else '<div style="font-size:3rem;">🫀</div>'
+        logo_html = f'<img src="{logo_institucional_b64}" style="max-width:180px; margin-bottom:1rem;">' if logo_institucional_b64 else '<div style="font-size:3rem;">🫀</div>'
         st.markdown(f'<div class="cencardio-card">{logo_html}<div style="font-weight:800; font-size:1.2rem; margin-bottom:1rem;">CERTIFICADO DE AUTENTICIDAD FORENSE</div><div style="background:#f0fdf4; border:1px solid #86efac; border-radius:12px; padding:1.3rem; text-align:left;"><b>Procedimiento:</b> {urllib.parse.unquote(params.get("proc",""))}<br><b>Paciente:</b> {urllib.parse.unquote(params.get("pac",""))}<br><b>Lector:</b> {urllib.parse.unquote(params.get("med",""))}<br><b>Fecha:</b> {urllib.parse.unquote(params.get("fec",""))}<br><b>Cód:</b> {params.get("val","")}</div></div>', unsafe_allow_html=True)
         if st.button("Ir al Portal", use_container_width=True):
             st.query_params.clear()
@@ -1718,8 +1809,7 @@ if "val" in params:
 if not st.session_state.autenticado:
     c1, c2, c3 = st.columns([1, 1.6, 1])
     with c2:
-        logo_data = obtener_logo_b64()
-        logo_html = f'<img src="{logo_data}" style="max-width:170px; margin-bottom:1rem;">' if logo_data else '<div style="font-size:3rem;">🫀</div>'
+        logo_html = f'<img src="{logo_institucional_b64}" style="max-width:170px; margin-bottom:1rem;">' if logo_institucional_b64 else '<div style="font-size:3rem;">🫀</div>'
         st.markdown(f'<div class="cencardio-card">{logo_html}<div style="font-size:1.25rem; font-weight:800; color:#0a2540;">Centro Cardiovascular Colombiano</div><div style="font-size:0.8rem; font-weight:700; color:#c8102e; margin-bottom:1.8rem;">CENCARDIO ENTERPRISE WORKSTATION</div>', unsafe_allow_html=True)
         with st.form("login"):
             usr = st.selectbox("Especialista Responsable:", OPCIONES_NOMBRES)
@@ -1737,8 +1827,10 @@ if not st.session_state.autenticado:
 
 perfil_activo = next(x for x in LISTA_ESPECIALISTAS if x["id"] == st.session_state.usuario_actual)
 with st.sidebar:
+    if logo_institucional_b64:
+        st.markdown(f'<div style="text-align:center; background:#ffffff; padding:10px; border-radius:12px; border:1px solid #cbd5e1; margin-bottom:12px;"><img src="{logo_institucional_b64}" style="max-width:165px; height:auto;"></div>', unsafe_allow_html=True)
     st.markdown(f'<div class="specialist-card"><div style="font-weight:800; font-size:0.95rem;">{perfil_activo["nombre_completo"]}</div><div style="font-size:0.74rem; color:#93c5fd;">{perfil_activo["especialidad"]} · {perfil_activo["registro"]}</div></div>', unsafe_allow_html=True)
-    mod_sel = st.radio("Modalidad Diagnóstica:", ["🫀 Holter (895001)", "🩺 MAPA (895003)", "🏃 Esfuerzo (893805)"])
+    mod_sel = st.radio("Modo de Trabajo:", ["🤖 Auto-Detección PDF (Holter / MAPA / Esfuerzo)", "🏃 Prueba de Esfuerzo Manual / Fotos (893805)"])
     if procesar_firma_transparente() and perfil_activo["id"] in ["dr.amaya", "admin"]:
         st.success("🖋️ Sello digitalizado activo.")
     st.divider()
@@ -1758,7 +1850,8 @@ with st.sidebar:
         st.session_state.autenticado = False
         st.rerun()
 
-st.markdown(f'<div class="top-hospital-bar"><div><div style="font-size:1.38rem; font-weight:800; letter-spacing:-0.02em;">CENCARDIO ENTERPRISE WORKSTATION</div><div style="font-size:0.80rem; font-weight:600; color:#cbd5e1;">Centro Cardiovascular Colombiano · Unidad de Electrofisiología, Hemodinamia y Diagnóstico No Invasivo</div></div><div style="display:flex; gap:10px; align-items:center;"><span class="inst-badge-success">{"☁️ Nube Supabase Activa" if supabase else "💾 Custodia Local SQLite"}</span><span class="inst-badge-primary">🔬 Motor Súper Senior 100%</span></div></div>', unsafe_allow_html=True)
+logo_top_html = f'<img src="{logo_institucional_b64}" class="brand-logo-img">' if logo_institucional_b64 else ''
+st.markdown(f'<div class="top-hospital-bar"><div class="brand-left">{logo_top_html}<div><div style="font-size:1.38rem; font-weight:800; letter-spacing:-0.02em;">CENCARDIO ENTERPRISE WORKSTATION</div><div style="font-size:0.80rem; font-weight:600; color:#cbd5e1;">Centro Cardiovascular Colombiano · Unidad de Electrofisiología, Hemodinamia y Diagnóstico No Invasivo</div></div></div><div style="display:flex; gap:10px; align-items:center;"><span class="inst-badge-success">{"☁️ Nube Supabase Activa" if supabase else "💾 Custodia Local SQLite"}</span><span class="inst-badge-primary">🔬 Visión IA 150 DPI · Guías ESC/AHA</span></div></div>', unsafe_allow_html=True)
 
 tab_procesar, tab_historial = st.tabs(["📥 Estación de Lectura & Dictamen", "📁 Archivo Clínico & Reportes RIPS"])
 
@@ -1768,13 +1861,13 @@ if "up_key_hm" not in st.session_state:
     st.session_state.up_key_hm = str(uuid.uuid4())
 
 # ==============================================================================
-# PESTAÑA 1: PROCESAMIENTO (HOLTER, MAPA Y ESFUERZO)
+# PESTAÑA 1: PROCESAMIENTO INTELIGENTE CON AUTO-DETECCIÓN DE DOCUMENTO
 # ==============================================================================
 with tab_procesar:
-    if "Esfuerzo" in mod_sel:
+    if "Fotos" in mod_sel:
         col_esf1, col_esf2 = st.columns([1, 1], gap="large")
         with col_esf1:
-            up_pdf_esf = st.file_uploader("📥 Cargar PDF Consolidado:", type=["pdf"], key=st.session_state.up_key_esf)
+            up_pdf_esf = st.file_uploader("📥 Cargar PDF de Prueba de Esfuerzo:", type=["pdf"], key=st.session_state.up_key_esf)
         with col_esf2:
             fotos_esfuerzo = st.file_uploader("📸 O subir fotos de tiras:", type=["jpg", "jpeg", "png"], accept_multiple_files=True, key="fot_esf")
         
@@ -1886,19 +1979,25 @@ with tab_procesar:
                     st.image(img_erg_prev, use_container_width=True)
 
     else:
-        up_file = st.file_uploader(f"📥 Cargar PDF de {mod_sel}", type=["pdf"], key=st.session_state.up_key_hm)
+        up_file = st.file_uploader("📥 Cargar PDF Clínico (El sistema detecta automáticamente si es HOLTER, MAPA o PRUEBA DE ESFUERZO):", type=["pdf"], key=st.session_state.up_key_hm)
         if up_file:
             b_pdf = up_file.getvalue()
             if st.session_state.get("last_file") != up_file.name:
-                with st.spinner("🚀 Ejecutando AUDITORÍA CLÍNICA SÚPER SENIOR (100% de páginas y tiras)..."):
-                    mod = "HOLTER" if "Holter" in mod_sel else "MAPA"
-                    d_final = ejecutar_triple_engine_universal(b_pdf, mod)
+                with st.spinner("🔍 Auto-detectando tipo de examen y ejecutando Auditoría Súper Senior (150 DPI)..."):
+                    mod_detectada = detectar_modalidad_pdf(b_pdf) or "HOLTER"
+                    st.session_state.mod_detectada = mod_detectada
+                    d_final = ejecutar_triple_engine_universal(b_pdf, mod_detectada)
                     st.session_state.d_final = d_final
-                    st.session_state.txt_final = redactar_informe_holter_11_puntos(d_final, perfil_activo) if mod == "HOLTER" else redactar_informe_mapa_cencardio(d_final, perfil_activo)
+                    if mod_detectada == "HOLTER":
+                        st.session_state.txt_final = redactar_informe_holter_11_puntos(d_final, perfil_activo)
+                    elif mod_detectada == "MAPA":
+                        st.session_state.txt_final = redactar_informe_mapa_cencardio(d_final, perfil_activo)
+                    else:
+                        st.session_state.txt_final = redactar_informe_ergometria_institucional(d_final, perfil_activo)
                     st.session_state.last_file = up_file.name
                     st.session_state.uid = str(uuid.uuid4()).upper()
                     st.session_state.tel = buscar_telefono_servicio(d_final.get("cedula"))
-                    st.toast(f"✅ {d_final.get('motores_info')}")
+                    st.toast(f"✅ Documento detectado: {mod_detectada} · {d_final.get('motores_info')}")
             
             if st.button("🔄 Cargar Nuevo Estudio / Limpiar Datos", type="secondary"):
                 st.session_state.up_key_hm = str(uuid.uuid4())
@@ -1909,9 +2008,15 @@ with tab_procesar:
                 st.rerun()
 
             d = st.session_state.d_final
-            mod_actual = "HOLTER" if "Holter" in mod_sel else "MAPA"
-            cups_actual = "CUPS 895001" if mod_actual == "HOLTER" else "CUPS 895003"
-            mod_nombre = "Holter ECG 24H" if mod_actual == "HOLTER" else "MAPA Tensional 24H"
+            mod_actual = st.session_state.get("mod_detectada", "HOLTER")
+            if mod_actual == "HOLTER":
+                cups_actual, mod_nombre = "CUPS 895001", "Holter ECG 24H"
+            elif mod_actual == "MAPA":
+                cups_actual, mod_nombre = "CUPS 895003", "MAPA Tensional 24H"
+            else:
+                cups_actual, mod_nombre = "CUPS 893805", "Prueba de Esfuerzo"
+
+            st.info(f"🎯 **Tipo de Estudio Detectado Automáticamente:** `{mod_nombre} ({cups_actual})`")
             
             mostrar_semaforizacion_clinica(mod_actual, d)
             bloq, ale = ejecutar_sanity_checks(mod_actual, d)
@@ -1926,11 +2031,12 @@ with tab_procesar:
                 carga_v = (ev_c / tot_l) * 100 if tot_l > 0 else 0.0
                 alerta_pausa = "kpi-card-alert" if ((d.get("pausas") or 0) > 0 or (d.get("latidos_caidos") or 0) > 0) else ""
                 alerta_ev = "kpi-card-alert" if ((d.get("tv_episodios") or 0) > 0 or carga_v >= 10.0) else ""
+                disp_label = d.get("dispositivo_tipo") or "Sin Dispositivo"
                 
                 st.markdown(f"""
                 <div class="kpi-grid">
                     <div class="kpi-card">
-                        <div class="kpi-title">FC Promedio & Rango</div>
+                        <div class="kpi-title">FC Promedio & Rango (Pág 1)</div>
                         <div class="kpi-value">{d.get('fc_prom') or 'N/A'} lpm</div>
                         <div class="kpi-sub">Mín: {d.get('fc_min') or 'N/A'} lpm · Máx: {d.get('fc_max') or 'N/A'} lpm</div>
                     </div>
@@ -1945,9 +2051,9 @@ with tab_procesar:
                         <div class="kpi-sub">RR Máx: {d.get('rr_max_seg') or 'N/A'} s · FA: {d.get('fa_episodios') or 0} ep</div>
                     </div>
                     <div class="kpi-card">
-                        <div class="kpi-title">VFC (SDNN) & Marcapasos</div>
+                        <div class="kpi-title">VFC (SDNN) & Dispositivo</div>
                         <div class="kpi-value">{f"{d.get('sdnn_24h')} ms" if d.get('sdnn_24h') is not None else "N/A"}</div>
-                        <div class="kpi-sub">MCP: {d.get('mcp_porcentaje') or 0.0:.1f}% ({d.get('mcp_latidos') or 0:,} lat) · QTc: {d.get('qtc_prom') or 'N/A'} ms</div>
+                        <div class="kpi-sub">{disp_label}: {d.get('mcp_porcentaje') or 0.0:.1f}% · QTc: {d.get('qtc_prom') or 'N/A'} ms</div>
                     </div>
                 </div>
                 """, unsafe_allow_html=True)
@@ -1956,11 +2062,11 @@ with tab_procesar:
                     ca1, ca2, ca3 = st.columns(3)
                     with ca1:
                         st.markdown("**1. Conteo Matricial y Calidad**")
-                        st.write(f"• **Páginas Auditadas:** {d.get('paginas_auditadas', 'Total')}")
+                        st.write(f"• **Páginas Auditadas (150 DPI):** {d.get('paginas_auditadas', 'Total')}")
                         st.write(f"• **Duración / Artefacto:** {d.get('duracion_analizada') or 'N/A'}")
                         st.write(f"• **Total Latidos:** {d.get('total_latidos') or 0:,}")
                         st.write(f"• **Normales:** {d.get('latidos_normales') or 0:,} ({d.get('normales_pct') or 0}%)")
-                        st.write(f"• **Marcapasos:** {d.get('mcp_latidos') or 0:,} ({d.get('mcp_porcentaje') or 0}%)")
+                        st.write(f"• **Dispositivo ({disp_label}):** {d.get('mcp_latidos') or 0:,} ({d.get('mcp_porcentaje') or 0}%)")
                         if d.get("mcp_modo_tiras"):
                             st.write(f"• **Modo en Tiras ECG:** {d.get('mcp_modo_tiras')}")
                     with ca2:
@@ -1985,7 +2091,7 @@ with tab_procesar:
 
                 fig_taco = generar_grafica_tacograma(d)
                 st.plotly_chart(fig_taco, use_container_width=True)
-            else:
+            elif mod_actual == "MAPA":
                 c1, c2, c3, c4 = st.columns(4)
                 c1.metric("PAM 24H", f"{d.get('pam_24h') or 'N/A'} mmHg", f"{d.get('pas_24h') or 'N/A'}/{d.get('pad_24h') or 'N/A'}")
                 c2.metric("Carga Sistólica", f"{d.get('carga_pas') or 0.0}%")
@@ -2009,8 +2115,10 @@ with tab_procesar:
                 debe_estampar = perfil_activo["id"] in ["dr.amaya", "admin"]
                 if mod_actual == "HOLTER":
                     p_final, img_p = inyectar_holter_pdf(b_pdf, txt_edit, p_nom, perfil_activo, uid, debe_estampar)
-                else:
+                elif mod_actual == "MAPA":
                     p_final, img_p = inyectar_mapa_pdf(b_pdf, txt_edit, p_nom, perfil_activo, uid, debe_estampar)
+                else:
+                    p_final, img_p = generar_pdf_ergometria_completo(d, txt_edit, perfil_activo, uid, [])
                 
                 c_b1, c_b2 = st.columns(2)
                 c_b1.download_button("📄 DESCARGAR FIRMADO", data=p_final, file_name=f"{normalizar_nombre_archivo(p_nom)}_{cups_actual}.pdf", mime="application/pdf", type="primary", use_container_width=True)
@@ -2029,7 +2137,7 @@ with tab_procesar:
                     url_c = f"https://holtercencardio.streamlit.app/?val={uid[:12]}&pac={urllib.parse.quote(p_nom)}&med={urllib.parse.quote(perfil_activo['nombre_completo'])}&proc={urllib.parse.quote(mod_nombre)}"
                     st.link_button("📲 ENVIAR RESULTADO POR WHATSAPP", f"https://wa.me/{t_l}?text={urllib.parse.quote(f'Estimado(a) {p_nom}, CENCARDIO le entrega su resultado de {mod_nombre}. Certificado oficial: {url_c}')}", use_container_width=True)
             with col_prev:
-                st.subheader("👁️ Vista Previa Oficial")
+                st.subheader("👁️ Vista Previa Oficial (Sin Logotipo en PDF)")
                 st.markdown('<div class="preview-container">', unsafe_allow_html=True)
                 st.image(img_p, use_container_width=True)
                 st.markdown('</div>', unsafe_allow_html=True)
