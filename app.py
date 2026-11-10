@@ -533,7 +533,7 @@ def auditar_coherencia_informe(texto_informe, datos, modalidad):
     texto_upper = texto_informe.upper()
     if modalidad == "HOLTER":
         if "SIN ALTERACIONES ISQUÉMICAS" in texto_upper and ((datos.get("st_episodios") or 0) > 0 or datos.get("st_morfologia_alterada")):
-            discrepancias.append("El texto indica 'Sin alteraciones del ST', pero se detectaron eventos o alteraciones morfológicas del ST/onda T.")
+            discrepancias.append("El texto indica 'Sin alteraciones del ST', pero se detectaron alteraciones del segmento ST.")
         if "TAQUICARDIA VENTRICULAR" in texto_upper and (datos.get("tv_episodios") or 0) == 0:
             discrepancias.append("Se menciona 'Taquicardia Ventricular', pero el contador es 0 o nulo.")
     return discrepancias
@@ -585,8 +585,7 @@ def mostrar_semaforizacion_clinica(modalidad, datos):
                 modo_m = f" - {datos.get('mcp_modo_tiras')}" if datos.get("mcp_modo_tiras") else ""
                 detalles.append(f"Paciente portador de Dispositivo Cardíaco [{disp_tipo}] ({datos.get('mcp_porcentaje') or 0.0:.1f}% estimulado{modo_m})")
             if st_ep > 0 or st_morf:
-                det_st_m = datos.get("st_morfologia_detalle") or "rectificación del segmento ST y/o aplanamiento de la onda T en trazados"
-                detalles.append(f"Alteración del segmento ST / repolarización ventricular: {det_st_m}")
+                detalles.append("Alteraciones del segmento ST documentadas")
             if pr_int is not None and pr_int > 200:
                 detalles.append(f"Bloqueo AV de primer grado documentado (PR: {pr_int} ms)")
             if duplas > 0:
@@ -603,7 +602,7 @@ def mostrar_semaforizacion_clinica(modalidad, datos):
                 detalles.append(f"QTc prolongado ({qtc} ms)")
             
             if detalles:
-                nivel, titulo = "AMARILLO", "PRECAUCIÓN CLÍNICA: REPOLARIZACIÓN, DISPOSITIVO O PARÁMETROS EN VIGILANCIA"
+                nivel, titulo = "AMARILLO", "PRECAUCIÓN CLÍNICA: DISPOSITIVO O PARÁMETROS EN VIGILANCIA"
             else:
                 detalles.append("Ritmo sinusal conservado, conducción AV normal y sin arritmias complejas.")
             
@@ -1011,10 +1010,7 @@ def extraer_m1_holter_paginado(paginas_txt):
             discordancia_qt_t_plana = True
 
     d["st_morfologia_alterada"] = bool(es_contexto_isquemico or discordancia_qt_t_plana)
-    if d["st_morfologia_alterada"]:
-        d["st_morfologia_detalle"] = "rectificación del segmento ST y aplanamiento de las ondas T"
-    else:
-        d["st_morfologia_detalle"] = None
+    d["st_morfologia_detalle"] = "Alteraciones del segmento ST" if d["st_morfologia_alterada"] else None
 
     d["eventos_tiras_auditadas"] = eventos_tiras[:15]
     d["paginas_auditadas"] = len(paginas_txt)
@@ -1130,7 +1126,6 @@ def arbitrar_valor(k, v1, v2, tipo, criticidad="baja"):
     if v1 is not None and v2 is not None:
         if v1 == v2:
             return v1, None
-        # Si M1 dio 0 pero la IA Clínica (M2) encontró un valor positivo real en tablas/tiras, se rescata el valor positivo
         if v1 == 0 and v2 > 0 and k in ["st_dep_episodios", "st_elev_episodios", "pausas", "latidos_caidos", "tv_episodios", "ev_duplas", "fa_episodios"]:
             return v2, f"⚕️ Hallazgo positivo detectado por IA Clínica en '{k}': {v2}."
         return v1, f"⚖️ Arbitraje en {k}: Extractor Matricial ({v1}) prevalece sobre IA ({v2})."
@@ -1160,7 +1155,6 @@ def auditar_motor_3_universal(m1, m2, modalidad):
             val, _ = arbitrar_valor(k, m1.get(k), m2.get(k) if m2 else None, int, "baja")
             d_f[k] = val
 
-        # En el QTc, siempre prevalece el canal con mayor porcentaje analizado extraído de las tablas finales
         if m1.get("qtc_canal_mejor_pct", 0) >= 15 and m1.get("qtc_prom"):
             d_f["qtc_prom"] = m1["qtc_prom"]
 
@@ -1198,15 +1192,10 @@ def auditar_motor_3_universal(m1, m2, modalidad):
             d_f["dispositivo_tipo"] = "MCP"
             d_f["tiene_dispositivo"] = True
 
-        # CONSOLIDACIÓN DE LA LECTURA VISUAL DE LAS TIRAS ECG Y GRÁFICAS ST (PUNTO 4)
+        # CONSOLIDACIÓN DE LA LECTURA VISUAL DEL SEGMENTO ST (PUNTO 4)
         st_morf_ia = bool(m2.get("st_morfologia_alterada")) if m2 else False
         d_f["st_morfologia_alterada"] = bool(m1.get("st_morfologia_alterada") or st_morf_ia)
-        if m2 and m2.get("st_morfologia_detalle") and str(m2.get("st_morfologia_detalle")).lower() not in ["null", "none", "", "normal", "sin alteraciones"]:
-            d_f["st_morfologia_detalle"] = str(m2.get("st_morfologia_detalle")).strip()
-        elif d_f["st_morfologia_alterada"] and not d_f.get("st_morfologia_detalle"):
-            d_f["st_morfologia_detalle"] = "rectificación del segmento ST y aplanamiento de las ondas T"
-        else:
-            d_f["st_morfologia_detalle"] = m1.get("st_morfologia_detalle")
+        d_f["st_morfologia_detalle"] = "Alteraciones del segmento ST" if d_f["st_morfologia_alterada"] else None
 
         if m2 and m2.get("resumen_lectura_paginas"):
             d_f["resumen_ia_paginas"] = m2.get("resumen_lectura_paginas")
@@ -1274,7 +1263,7 @@ def ejecutar_triple_engine_universal(pdf_bytes, modalidad="HOLTER"):
     else:
         m1 = extraer_m1_esfuerzo(texto_completo)
 
-    # Renderizado directo a 150 DPI nativos desde PyMuPDF (sin reducir dimensiones para conservar la cuadrícula ECG)
+    # Renderizado directo a 150 DPI nativos desde PyMuPDF
     inline_images = []
     for num_p in range(total_pags):
         try:
@@ -1296,14 +1285,14 @@ REGLAS DE AUDITORÍA CLÍNICA PUNTO POR PUNTO:
 1. CONTEO Y DISPOSITIVOS (MCP / CDI / CRI): En la fila 'Conteo' de la Página 1, las 5 columnas son Total, Normal, Ventricular, SupraVentricular y Marcapaso. Solo pon "mcp_presente": true si la 5ta columna (Marcapaso) es > 0. Si dice 0% y 0, es FALSE. Si en Comentarios/DX indica Marcapasos (MCP), Cardiodesfibrilador (CDI) o Cardiorresincronizador (CRI/TRC), indícalo en "dispositivo_tipo".
 2. FC MÍNIMA, MÁXIMA Y PROMEDIO: Toma FC Promedio, Máxima y Mínima exclusivamente de la tabla 'FC (promedio 1 min)' de la Página 1.
 3. PAUSAS Y CONDUCCIÓN AV: Extrae el conteo exacto de 'Pausa' y 'Latido caído' en la Página 1 y la pausa máxima en segundos.
-4. SEGMENTO ST Y MORFOLOGÍA DE LAS ONDAS EN TIRAS Y GRÁFICAS (MUY IMPORTANTE):
+4. SEGMENTO ST EN TABLA, TIRAS Y GRÁFICAS (MUY IMPORTANTE):
    - Revisa la tabla 'Resumen de análisis de ST' (conteo de Elevación ST y Depresión ST >= 1.0 mm).
-   - AUNQUE LA TABLA DIGA 0 EVENTOS, debes inspeccionar visualmente todas las TIRAS ECG a 25 mm/s (canales 1, 2 y 3) y las 'Gráficas de ST' (Canal 1, Canal 2 y Canal 3). Si observas rectificación del segmento ST, aplanamiento de las ondas T (ondas T planas/isoeléctricas), inversión de onda T, depresión submilimétrica o desplazamiento de la línea de base (especialmente en pacientes con DX de IAMSEST/isquemia o cuando el Canal QT 1 apenas logra medir el 2% de las ondas T por aplanamiento), DEBES poner `"st_morfologia_alterada": true` y describirlo como `"rectificación del segmento ST y aplanamiento de las ondas T"`.
+   - AUNQUE LA TABLA DIGA 0 EVENTOS, inspecciona visualmente todas las TIRAS ECG a 25 mm/s (canales 1, 2 y 3) y las 'Gráficas de ST' (Canal 1, Canal 2 y Canal 3). Si observas alteración del segmento ST (rectificación, aplanamiento, depresión o desplazamiento basal, o contexto de IAMSEST/isquemia), pon `"st_morfologia_alterada": true`.
 5. ARRITMIAS VENTRICULARES Y SUPRAVENTRICULARES: Extrae exclusivamente los conteos reales de la Página 1 ('TV', 'Sec. V/AIVR', 'Apareado', 'Bigeminismo', 'Trigeminismo', 'Eventos individuales de EV', 'TSV', 'Total FA'). No inventes eventos si están en 0.
 6. VARIABILIDAD (SDNN) Y QTc: En la fila 'Valor de 24 horas' de la tabla VFC, el SEGUNDO número es SDNN (mseg). En las tablas de QT ('Todos los períodos' de Canal QT 1, 2 y 3), elige el Prom. QTc (ms) del canal que tenga el MAYOR 'Porcentaje analizado'.
 
 Devuelve ÚNICAMENTE JSON estricto:
-{{"paciente": "str", "cedula": "str", "mcp_presente": bool, "dispositivo_tipo": "str", "mcp_latidos": int, "mcp_porcentaje": float, "fc_prom": int, "fc_dia": int, "fc_noc": int, "fc_max": int, "fc_min": int, "total_latidos": int, "latidos_normales": int, "pausas": int, "rr_max_seg": float, "pausa_max_seg": float, "ev_total": int, "tv_episodios": int, "aivr_episodios": int, "ev_duplas": int, "esv_total": int, "tsv_episodios": int, "fa_episodios": int, "sdnn_24h": int, "qtc_prom": int, "pr_intervalo": int, "st_dep_episodios": int, "st_elev_episodios": int, "st_morfologia_alterada": bool, "st_morfologia_detalle": "str", "eventos_paciente": int, "tiene_bloqueo_rama": bool, "taqui_conteo": int, "bradi_conteo": int, "taqui_fc_max": int, "bradi_fc_min": int, "latidos_caidos": int, "bigeminismo": int, "trigeminismo": int, "resumen_lectura_paginas": "str"}}"""
+{{"paciente": "str", "cedula": "str", "mcp_presente": bool, "dispositivo_tipo": "str", "mcp_latidos": int, "mcp_porcentaje": float, "fc_prom": int, "fc_dia": int, "fc_noc": int, "fc_max": int, "fc_min": int, "total_latidos": int, "latidos_normales": int, "pausas": int, "rr_max_seg": float, "pausa_max_seg": float, "ev_total": int, "tv_episodios": int, "aivr_episodios": int, "ev_duplas": int, "esv_total": int, "tsv_episodios": int, "fa_episodios": int, "sdnn_24h": int, "qtc_prom": int, "pr_intervalo": int, "st_dep_episodios": int, "st_elev_episodios": int, "st_morfologia_alterada": bool, "eventos_paciente": int, "tiene_bloqueo_rama": bool, "taqui_conteo": int, "bradi_conteo": int, "taqui_fc_max": int, "bradi_fc_min": int, "latidos_caidos": int, "bigeminismo": int, "trigeminismo": int, "resumen_lectura_paginas": "str"}}"""
     elif modalidad == "MAPA":
         prompt_ia = f"""Eres un Cardiólogo Súper Senior (Guías ESC/ESH). Analiza el 100% de las {total_pags} páginas de este MAPA.
 Texto: {texto_completo}
@@ -1386,15 +1375,13 @@ def redactar_informe_holter_11_puntos(d, perfil):
         txt_pr = "Intervalos PR normales"
     p3 = f"3. {txt_pr} y {txt_qtc}."
 
-    # PUNTO 4: DETECCIÓN TANTO POR EVENTOS NUMÉRICOS COMO POR RECTIFICACIÓN / APLANAMIENTO EN ONDAS
+    # PUNTO 4: REDACCIÓN LIMPIA Y ESTÁNDAR ("Alteraciones del segmento ST")
     st_ep = d.get("st_episodios") or 0
     st_morf = d.get("st_morfologia_alterada", False)
-    st_morf_det = d.get("st_morfologia_detalle") or "rectificación del segmento ST y aplanamiento de las ondas T"
     if st_ep > 0:
-        det_st = f" (desviación máx {d.get('st_max_mm')} mm)" if d.get("st_max_mm") else ""
-        p4 = f"4. Alteraciones del segmento ST ({st_ep} eventos{det_st})."
+        p4 = f"4. Alteraciones del segmento ST ({st_ep} eventos)."
     elif st_morf:
-        p4 = f"4. Alteración del segmento ST y de la repolarización ventricular por {st_morf_det}."
+        p4 = "4. Alteraciones del segmento ST."
     else:
         p4 = "4. Sin alteraciones isquémicas del segmento ST."
     
@@ -1555,7 +1542,7 @@ def redactar_informe_holter_11_puntos(d, perfil):
         if fa_ep > 0:
             hallazgos_conc.append("Episodio de Fibrilación Auricular paroxística.")
         if st_ep > 0 or st_morf:
-            hallazgos_conc.append("Alteración del segmento ST y de la repolarización ventricular.")
+            hallazgos_conc.append("Alteraciones del segmento ST.")
         hallazgos_conc.append(d_vfc)
         diag = " ".join(hallazgos_conc)
 
@@ -1753,7 +1740,6 @@ def generar_pdf_ergometria_completo(d, texto_informe, perfil, cod_uuid, imagenes
     doc = fitz.open()
     page = doc.new_page(width=612, height=792)
 
-    # Encabezado institucional limpio en texto (sin logotipo de imagen en el PDF)
     page.insert_text(fitz.Point(36, 45), "CENTRO CARDIOVASCULAR COLOMBIANO CENCARDIO", fontsize=11.5, fontname="helv", color=(0.04, 0.15, 0.25))
     page.insert_text(fitz.Point(36, 58), "INFORME DE ERGOMETRÍA Y PRUEBA DE ESFUERZO COMPUTARIZADA", fontsize=8.5, fontname="helv", color=(0.78, 0.06, 0.18))
     page.insert_text(fitz.Point(36, 70), "CUPS: 893805 · Habilitación MinSalud Colombia · Res. 3100 de 2019", fontsize=7, fontname="helv", color=(0.4, 0.45, 0.5))
@@ -2223,7 +2209,7 @@ with tab_procesar:
                 </div>
                 """, unsafe_allow_html=True)
 
-                with st.expander("🔬 AUDITORÍA ELECTROFISIOLÓGICA SÚPER SENIOR (Desglose 100% Tablas + Morfología Tiras)", expanded=False):
+                with st.expander("🔬 AUDITORÍA ELECTROFISIOLÓGICA SÚPER SENIOR (Desglose 100% Tablas + Tiras)", expanded=False):
                     ca1, ca2, ca3 = st.columns(3)
                     with ca1:
                         st.markdown("**1. Conteo Matricial y Contexto**")
@@ -2242,11 +2228,11 @@ with tab_procesar:
                         st.write(f"• **Fibrilación Auricular (FA):** {d.get('fa_episodios') or 0} ep ({d.get('fa_duracion') or '0 seg'})")
                         st.write(f"• **Duplas ESV / Sec. ESV:** {d.get('esv_duplas') or 0} / {d.get('sec_esv') or 0}")
                     with ca3:
-                        st.markdown("**3. Matriz VFC, Morfología ST-T y Canales QT**")
+                        st.markdown("**3. Matriz VFC, Segmento ST y Canales QT**")
                         st.write(f"• **VFC 24h (SDNN / SDNNI / RMSSD):** {d.get('sdnn_24h')} / {d.get('sdnni_24h')} / {d.get('rmssd_24h')} ms ({d.get('vfc_pct_analizado')}% analizado)")
                         st.write(f"• **SNN50 / Índ. Triangular:** {d.get('snn50_24h')} / {d.get('ind_triang_24h')}")
                         st.write(f"• **Eventos ST >=1mm (Elev/Dep):** {d.get('st_elev_episodios') or 0} / {d.get('st_dep_episodios') or 0}")
-                        st.write(f"• **Morfología ST-T en Tiras:** {d.get('st_morfologia_detalle') or 'Normal / Isoeléctrica'}")
+                        st.write(f"• **Estado ST en Trazados:** {'Alteraciones del segmento ST' if d.get('st_morfologia_alterada') else 'Normal'}")
                         if d.get("qtc_canales"):
                             qtc_str = " | ".join([f"C{idx+1}: {c['qtc_prom']}ms ({c['pct_analizado']}%)" for idx, c in enumerate(d["qtc_canales"])])
                             st.write(f"• **QTc Multi-Canal:** {qtc_str}")
