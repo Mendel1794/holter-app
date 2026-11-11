@@ -680,7 +680,7 @@ def generar_grafica_tacograma(d):
     return fig
 
 # ==============================================================================
-# MOTOR 1: EXTRACTOR DETERMINÍSTICO SÚPER SENIOR (PÁGINA POR PÁGINA)
+# MOTOR 1: EXTRACTOR DETERMINÍSTICO SÚPER SENIOR (CON DESAPILADO Y ANTI-RUIDO)
 # ==============================================================================
 def limpiar_numero(val_str, tipo=int):
     if val_str is None:
@@ -727,13 +727,13 @@ def extraer_m1_holter_paginado(paginas_txt):
     d["duracion_analizada"] = m_dur.group(1).strip() if m_dur else None
     d["artefacto_pct"] = extraer_numero(r"([\d,\.]+)\s*%\s*artefacto", pag1_flat, float)
 
-    m_com = re.search(r"Comentarios\s*de\s*la\s*prueba:\s*(.*?)(?:Grabado|Analizado|Latidos)", pag1_raw, re.IGNORECASE | re.DOTALL)
+    m_com = re.search(r"Comentarios\s*de\s*la\s*prueba:\s*(.*?)(?:Grabado|Analizado|Latidos|Informe\s*Holter|No\s*confirmado)", pag1_raw, re.IGNORECASE | re.DOTALL)
     d["comentarios_clinicos"] = re.sub(r'\s+', ' ', m_com.group(1)).strip() if m_com else ""
 
     m_pab = re.search(r"Pabell[óo]n:\s*\|?\s*([^\n\r\|]+)", pag1_raw, re.IGNORECASE)
     d["pabellon"] = m_pab.group(1).strip() if m_pab else ""
 
-    # 2. FRECUENCIA CARDÍACA (AISLADA EN EL BLOQUE "FC (promedio 1 min)")
+    # 2. FRECUENCIA CARDÍACA (SOPORTA FORMATO NORMAL Y FORMATO APILADO "Máx \n Min | 129 \n 54")
     m_bloque_fc = re.search(r"FC\s*\(promedio\s*1\s*min\)(.*?)Eventos\s*dependientes", pag1_flat, re.IGNORECASE)
     if m_bloque_fc:
         zona_fc = m_bloque_fc.group(1)
@@ -741,19 +741,40 @@ def extraer_m1_holter_paginado(paginas_txt):
         m_alt_fc = re.search(r"Intervalo\s*NN(.*?)Eventos\s*dependientes", pag1_flat, re.IGNORECASE)
         zona_fc = m_alt_fc.group(1) if m_alt_fc else pag1_flat
 
-    d["fc_max"]  = extraer_numero(r"M[áa]x\b[\s\|]*(\d{2,3})\b", zona_fc, int)
-    d["fc_min"]  = extraer_numero(r"M[íi]n\b(?![\.\s]*seg)[\s\|]*(\d{2,3})\b", zona_fc, int)
+    m_fc_stack = re.search(r"M[áa]x\s*[\|\s]*M[íi]n[\s\|]*(\d{2,3})[\s\|]+(\d{2,3})\b", zona_fc, re.IGNORECASE)
+    if m_fc_stack:
+        d["fc_max"] = limpiar_numero(m_fc_stack.group(1), int)
+        d["fc_min"] = limpiar_numero(m_fc_stack.group(2), int)
+    else:
+        d["fc_max"] = extraer_numero(r"M[áa]x\b[\s\|]*(\d{2,3})\b", zona_fc, int)
+        d["fc_min"] = extraer_numero(r"M[íi]n\b(?![\.\s]*seg)[\s\|]*(\d{2,3})\b", zona_fc, int)
+
+    # Respaldo cruzado con Página 2/3 ("Impreso FC máximo ... lpm" / "Impreso FC mínimo ... lpm")
+    if d.get("fc_max") is None:
+        d["fc_max"] = extraer_numero(r"Impreso\s*FC\s*m[áa]ximo\s*\d+:\d+:\d+\s*(\d{2,3})\s*[lI]pm", texto_completo, int)
+    if d.get("fc_min") is None:
+        d["fc_min"] = extraer_numero(r"Impreso\s*FC\s*m[íi]nimo\s*\d+:\d+:\d+\s*(\d{2,3})\s*[lI]pm", texto_completo, int)
+
     d["fc_prom"] = extraer_numero(r"Prom\.?\.?[\s\|]*(\d{2,3})\b", zona_fc, int)
     d["fc_dia"]  = extraer_numero(r"D[íi]a.*?Prom\.?\.?[\s\|]*(\d{2,3})\b", pag1_flat, int)
     d["fc_noc"]  = extraer_numero(r"Noche.*?Prom\.?\.?[\s\|]*(\d{2,3})\b", pag1_flat, int)
     d["pr_intervalo"] = extraer_numero(r"(?:Intervalo\s*PR|PR\s*Interval|PR\s*promedio|PR\s*medio)\s*[:\-\|]?\s*(\d{2,3})\b", pag1_flat, int)
 
-    d["rr_max_seg"] = extraer_numero(r"Intervalo\s*RR\s*M[áa]x\.?\s*longitud\s*([\d,\.]+)\s*s", pag1_flat, float)
-    d["rr_min_ms"]  = extraer_numero(r"Intervalo\s*RR.*?M[áa]s\s*corto\s*(\d{2,4})\s*ms", pag1_flat, int)
-    d["nn_max_seg"] = extraer_numero(r"Intervalo\s*NN\s*M[áa]x\.?\s*longitud\s*([\d,\.]+)\s*s", pag1_flat, float)
-    d["nn_min_ms"]  = extraer_numero(r"Intervalo\s*NN.*?M[áa]s\s*corto\s*(\d{2,4})\s*ms", pag1_flat, int)
+    # Intervalo RR Máximo (Soporta tanto segundos "1,36 s" como milisegundos "968 ms")
+    m_rr_max = re.search(r"Intervalo\s*RR\s*M[áa]x\.?\s*longitud\s*([\d,\.]+)\s*(ms|mseg|s|seg)", pag1_flat, re.IGNORECASE)
+    if m_rr_max:
+        val_rr = limpiar_numero(m_rr_max.group(1), float)
+        uni_rr = m_rr_max.group(2).lower()
+        if val_rr is not None:
+            d["rr_max_seg"] = round(val_rr / 1000.0, 2) if ("ms" in uni_rr or val_rr > 20.0) else val_rr
+        else:
+            d["rr_max_seg"] = None
+    else:
+        d["rr_max_seg"] = None
 
-    # 3. DECODIFICADOR MATRICIAL SPACELABS PARA TABLA "CONTEO" (SEPARA CONTEOS DE PORCENTAJES)
+    d["rr_min_ms"] = extraer_numero(r"Intervalo\s*RR.*?M[áa]s\s*corto\s*(\d{2,4})\s*ms", pag1_flat, int)
+
+    # 3. DECODIFICADOR MATRICIAL SPACELABS PARA TABLA "CONTEO" (CON CANDADO ANTI-RUIDO <1%)
     d["spacelabs_matrix_ok"] = False
     m_conteo = re.search(r"Conteo\s*\|?(.*?)(?:M[áa]x/hr|Intervalos)", pag1_raw, re.IGNORECASE | re.DOTALL)
     if m_conteo:
@@ -770,11 +791,17 @@ def extraer_m1_holter_paginado(paginas_txt):
             d["mcp_latidos"]      = conteos[4]
 
             d["normales_pct"]     = porcentajes[0]
-            d["ev_pct"]           = porcentajes[1]
-            d["esv_pct"]          = porcentajes[2]
-            d["mcp_porcentaje"]   = porcentajes[3]
+            d["ev_pct"]           = round((d["ev_total"] / d["total_latidos"]) * 100, 2) if d["total_latidos"] > 0 else 0.0
+            d["esv_pct"]          = round((d["esv_total"] / d["total_latidos"]) * 100, 2) if d["total_latidos"] > 0 else 0.0
 
-            d["mcp_presente"] = bool((d["mcp_latidos"] and d["mcp_latidos"] > 0) or (d["mcp_porcentaje"] and d["mcp_porcentaje"] > 0.0))
+            # Cálculo exacto del porcentaje de estimulación (Evita que 3 latidos de ruido con "<1%" se conviertan en 1.0%)
+            pct_mcp_real = (d["mcp_latidos"] / d["total_latidos"]) * 100.0 if d["total_latidos"] > 0 else 0.0
+            if pct_mcp_real < 1.0:
+                d["mcp_porcentaje"] = 0.0
+                d["mcp_presente"]   = False
+            else:
+                d["mcp_porcentaje"] = round(pct_mcp_real, 1)
+                d["mcp_presente"]   = True
             d["spacelabs_matrix_ok"] = True
 
     # 4. EVENTOS DEPENDIENTES DEL RITMO (PAUSAS, LATIDOS CAÍDOS, BRADI, TAQUI) EN PÁGINA 1
@@ -806,13 +833,16 @@ def extraer_m1_holter_paginado(paginas_txt):
         d["taqui_conteo"] = 0
         d["taqui_fc_max"] = d.get("fc_max")
 
-    # 5. DESGLOSE EXHAUSTIVO DE ARRITMIAS VENTRICULARES (EXCLUSIVO DE PÁGINA 1)
+    # 5. DESGLOSE EXHAUSTIVO DE ARRITMIAS VENTRICULARES (CON CANDADO ESC/AHA PARA TV >= 3 LATIDOS)
     d["ev_max_hr"] = extraer_numero(r"Latidos\s*ventriculares.*?M[áa]x/hr:\s*([\d\.,]+)", pag1_flat, int)
 
     m_tv = re.search(r"\bTV\b[\s\|]+(\d+)[\s\|]+(\d+)(?:.*?(\d{2,3}):)?", pag1_raw)
-    d["tv_episodios"] = limpiar_numero(m_tv.group(1), int) if m_tv else 0
-    d["tv_latidos"]   = limpiar_numero(m_tv.group(2), int) if m_tv else 0
-    d["tv_fc_max"]    = limpiar_numero(m_tv.group(3), int) if (m_tv and m_tv.group(3)) else None
+    tv_ep_raw  = limpiar_numero(m_tv.group(1), int) if m_tv else 0
+    tv_lat_raw = limpiar_numero(m_tv.group(2), int) if m_tv else 0
+    # Una salva de TV exige mínimo 3 latidos consecutivos (evita falsos positivos de 1 solo latido por artefacto)
+    d["tv_episodios"] = tv_ep_raw if (tv_ep_raw and tv_lat_raw and tv_lat_raw >= 3) else 0
+    d["tv_latidos"]   = tv_lat_raw if d["tv_episodios"] > 0 else 0
+    d["tv_fc_max"]    = limpiar_numero(m_tv.group(3), int) if (m_tv and m_tv.group(3) and d["tv_episodios"] > 0) else None
 
     m_aivr = re.search(r"Sec\.\s*V/AIVR[\s\|]+(\d+)[\s\|]+(\d+)", pag1_raw, re.IGNORECASE)
     d["aivr_episodios"] = limpiar_numero(m_aivr.group(1), int) if m_aivr else 0
@@ -825,13 +855,21 @@ def extraer_m1_holter_paginado(paginas_txt):
     d["ev_duplas"]         = limpiar_numero(m_apar.group(1), int) if m_apar else 0
     d["ev_duplas_latidos"] = limpiar_numero(m_apar.group(2), int) if m_apar else 0
 
-    m_big = re.search(r"Bigeminismo[\s\|]+(\d+)[\s\|]+(\d+)", pag1_raw, re.IGNORECASE)
-    d["bigeminismo"]         = limpiar_numero(m_big.group(1), int) if m_big else 0
-    d["bigeminismo_latidos"] = limpiar_numero(m_big.group(2), int) if m_big else 0
+    # Soporte para Bigeminismo y Trigeminismo apilados ("Bigeminismo \n Trigeminismo | 4 \n 0 | 24 \n 0")
+    m_bt_stack = re.search(r"Bigeminismo\s*[\|\s]*Trigeminismo[\s\|]+(\d+)[\s\|]+(\d+)[\s\|]+(\d+)[\s\|]+(\d+)", pag1_raw, re.IGNORECASE)
+    if m_bt_stack:
+        d["bigeminismo"]          = limpiar_numero(m_bt_stack.group(1), int) or 0
+        d["trigeminismo"]         = limpiar_numero(m_bt_stack.group(2), int) or 0
+        d["bigeminismo_latidos"]  = limpiar_numero(m_bt_stack.group(3), int) or 0
+        d["trigeminismo_latidos"] = limpiar_numero(m_bt_stack.group(4), int) or 0
+    else:
+        m_big = re.search(r"Bigeminismo[\s\|]+(\d+)[\s\|]+(\d+)", pag1_raw, re.IGNORECASE)
+        d["bigeminismo"]         = limpiar_numero(m_big.group(1), int) if m_big else 0
+        d["bigeminismo_latidos"] = limpiar_numero(m_big.group(2), int) if m_big else 0
 
-    m_trig = re.search(r"Trigeminismo[\s\|]+(\d+)[\s\|]+(\d+)", pag1_raw, re.IGNORECASE)
-    d["trigeminismo"]         = limpiar_numero(m_trig.group(1), int) if m_trig else 0
-    d["trigeminismo_latidos"] = limpiar_numero(m_trig.group(2), int) if m_trig else 0
+        m_trig = re.search(r"Trigeminismo[\s\|]+(\d+)[\s\|]+(\d+)", pag1_raw, re.IGNORECASE)
+        d["trigeminismo"]         = limpiar_numero(m_trig.group(1), int) if m_trig else 0
+        d["trigeminismo_latidos"] = limpiar_numero(m_trig.group(2), int) if m_trig else 0
 
     d["ev_aisladas"] = extraer_numero(r"Eventos\s*individuales\s*de\s*EV[\s\|]+(\d+)", pag1_raw, int) or 0
 
@@ -878,27 +916,37 @@ def extraer_m1_holter_paginado(paginas_txt):
     d["qtc_max_horario"]   = None
     d["mcp_fc_min_tira"]   = None
     d["mcp_fc_max_tira"]   = None
-    tiene_dp, tiene_vp = False, False
+    tiene_dp, tiene_vp, tiene_ap = False, False, False
     eventos_tiras = []
 
     for idx_p, p_txt in enumerate(paginas_txt):
         p_flat = re.sub(r'\s+', ' ', p_txt)
 
-        # A. Tabla de Resumen de Análisis de ST
+        # A. Tabla de Resumen de Análisis de ST (Soporta filas individuales y apiladas "Elevación ST \n Depresión ST")
         if "Resumen de análisis de ST" in p_txt or "Elevación ST" in p_txt:
-            m_st_el = re.search(r"Elevaci[óo]n\s*ST[\s\|]+(\d+)(?:[\s\|]+([\d,\.]+))?", p_txt, re.IGNORECASE)
-            if m_st_el:
-                d["st_elev_episodios"] = limpiar_numero(m_st_el.group(1), int) or 0
-                if m_st_el.group(2):
-                    d["st_max_mm"] = max(d["st_max_mm"], limpiar_numero(m_st_el.group(2), float) or 0.0)
-            m_st_dep = re.search(r"Depresi[óo]n\s*ST[\s\|]+(\d+)(?:[\s\|]+([\d,\.]+))?", p_txt, re.IGNORECASE)
-            if m_st_dep:
-                d["st_dep_episodios"] = limpiar_numero(m_st_dep.group(1), int) or 0
-                if m_st_dep.group(2):
-                    d["st_max_mm"] = max(d["st_max_mm"], limpiar_numero(m_st_dep.group(2), float) or 0.0)
-            m_carga_st = re.search(r"seg[\s\|]+([\d\.]+)[\s\|]+([\d\.]+)", p_txt)
-            if m_carga_st:
-                d["st_carga_total_mms"] = limpiar_numero(m_carga_st.group(1), int) or 0
+            m_st_stack = re.search(r"Elevaci[óo]n\s*ST\s*[\|\s]*Depresi[óo]n\s*ST[\s\|]+(\d+)[\s\|]+(\d+)", p_txt, re.IGNORECASE)
+            if m_st_stack:
+                d["st_elev_episodios"] = limpiar_numero(m_st_stack.group(1), int) or 0
+                d["st_dep_episodios"]  = limpiar_numero(m_st_stack.group(2), int) or 0
+            else:
+                m_st_el = re.search(r"Elevaci[óo]n\s*ST[\s\|]+(\d+)(?:[\s\|]+([\-\d,\.]+))?", p_txt, re.IGNORECASE)
+                if m_st_el:
+                    d["st_elev_episodios"] = limpiar_numero(m_st_el.group(1), int) or 0
+                    if m_st_el.group(2):
+                        d["st_max_mm"] = max(d["st_max_mm"], abs(limpiar_numero(m_st_el.group(2), float) or 0.0))
+                m_st_dep = re.search(r"Depresi[óo]n\s*ST[\s\|]+(\d+)(?:[\s\|]+([\-\d,\.]+))?", p_txt, re.IGNORECASE)
+                if m_st_dep:
+                    d["st_dep_episodios"] = limpiar_numero(m_st_dep.group(1), int) or 0
+                    if m_st_dep.group(2):
+                        d["st_max_mm"] = max(d["st_max_mm"], abs(limpiar_numero(m_st_dep.group(2), float) or 0.0))
+
+            m_st_tot = re.search(r"\bTotal\b[\s\|]+(\d+)[\s\|]+([\-\d,\.]+)", p_txt, re.IGNORECASE)
+            if m_st_tot:
+                tot_st = limpiar_numero(m_st_tot.group(1), int) or 0
+                if m_st_tot.group(2):
+                    d["st_max_mm"] = max(d["st_max_mm"], abs(limpiar_numero(m_st_tot.group(2), float) or 0.0))
+                if tot_st > (d["st_elev_episodios"] + d["st_dep_episodios"]):
+                    d["st_dep_episodios"] = tot_st - d["st_elev_episodios"]
 
         # B. Matriz VFC ("Valor de 24 horas")
         if "Valor de 24 horas" in p_txt:
@@ -935,11 +983,13 @@ def extraer_m1_holter_paginado(paginas_txt):
                 if qtc_h and 300 <= qtc_h <= 650:
                     d["qtc_max_horario"] = max(d["qtc_max_horario"] or 0, qtc_h)
 
-        # D. Tiras ECG: Marcas de Marcapasos (dP / vP) y Eventos Documentados
+        # D. Tiras ECG: Marcas de Estimulación (dP / vP / aP) y Eventos Documentados
         if re.search(r'\bdP\b', p_txt):
             tiene_dp = True
         if re.search(r'\bvP\b', p_txt):
             tiene_vp = True
+        if re.search(r'\baP\b', p_txt):
+            tiene_ap = True
 
         m_mcp_min = re.search(r"FC\s*m[íi]nimo\s*de\s*marcapaso.*?(\d{2,3})\s*[lI]pm", p_flat, re.IGNORECASE)
         if m_mcp_min:
@@ -965,24 +1015,25 @@ def extraer_m1_holter_paginado(paginas_txt):
         d["qt_prom"]  = None
         d["qtc_canal_mejor_pct"] = 0
 
-    if tiene_dp and tiene_vp:
-        d["mcp_modo_tiras"] = "estimulación secuencial bicameral (dP) y ventricular (vP)"
+    if (tiene_dp and tiene_vp) or (tiene_ap and tiene_vp):
+        d["mcp_modo_tiras"] = "estimulación secuencial bicameral (aP/vP)"
     elif tiene_dp:
         d["mcp_modo_tiras"] = "estimulación bicameral (dP)"
     elif tiene_vp:
         d["mcp_modo_tiras"] = "estimulación ventricular (vP)"
+    elif tiene_ap:
+        d["mcp_modo_tiras"] = "estimulación auricular (aP)"
     else:
         d["mcp_modo_tiras"] = None
 
-    # DETECCIÓN DE DISPOSITIVOS CARDÍACOS: MCP, CDI, CRI/TRC (SIN FALSOS POSITIVOS POR ENCABEZADOS)
+    # DETECCIÓN DE DISPOSITIVOS CARDÍACOS: MCP, CDI, CRI/TRC (BLINDADO CONTRA RUIDO < 1%)
     com_upper = (d.get("comentarios_clinicos") or "").upper()
     es_cdi = bool(re.search(r'\b(CDI|DAI|ICD|CARDIODESFIBRILADOR|DESFIBRILADOR)\b', com_upper))
     es_cri = bool(re.search(r'\b(CRI|TRC|CRT|CARDIORRESINCRONIZADOR|RESINCRONIZADOR)\b', com_upper))
     es_mcp_com = bool(re.search(r'\b(MCP|MARCAPASOS|MARCAPASO)\b', com_upper))
 
-    if d.get("mcp_fc_min_tira") or d.get("mcp_fc_max_tira") or tiene_dp or tiene_vp or es_mcp_com:
-        if not d.get("spacelabs_matrix_ok"):
-            d["mcp_presente"] = True
+    if d.get("mcp_fc_min_tira") or d.get("mcp_fc_max_tira") or es_cdi or es_cri or es_mcp_com:
+        d["mcp_presente"] = True
 
     if es_cdi and es_cri:
         d["dispositivo_tipo"] = "CRI-D / TRC-D"
@@ -1000,6 +1051,8 @@ def extraer_m1_holter_paginado(paginas_txt):
     else:
         d["dispositivo_tipo"] = None
         d["tiene_dispositivo"] = False
+        d["mcp_presente"] = False
+        d["mcp_porcentaje"] = 0.0
 
     # DETECCIÓN DE ALTERACIÓN DEL ST POR RECORTE/APLANAMIENTO DE ONDA O CONTEXTO CORONARIO
     es_contexto_isquemico = bool(re.search(r'\b(IAMSEST|IAMCEST|INFARTO|ANGINA|SINDROME CORONARIO|ISQUEMI)\b', com_upper))
@@ -1126,7 +1179,7 @@ def arbitrar_valor(k, v1, v2, tipo, criticidad="baja"):
     if v1 is not None and v2 is not None:
         if v1 == v2:
             return v1, None
-        if v1 == 0 and v2 > 0 and k in ["st_dep_episodios", "st_elev_episodios", "pausas", "latidos_caidos", "tv_episodios", "ev_duplas", "fa_episodios"]:
+        if v1 == 0 and v2 > 0 and k in ["st_dep_episodios", "st_elev_episodios", "pausas", "latidos_caidos", "ev_duplas", "fa_episodios"]:
             return v2, f"⚕️ Hallazgo positivo detectado por IA Clínica en '{k}': {v2}."
         return v1, f"⚖️ Arbitraje en {k}: Extractor Matricial ({v1}) prevalece sobre IA ({v2})."
     
@@ -1155,6 +1208,10 @@ def auditar_motor_3_universal(m1, m2, modalidad):
             val, _ = arbitrar_valor(k, m1.get(k), m2.get(k) if m2 else None, int, "baja")
             d_f[k] = val
 
+        # Candado ESC/AHA: Si M1 determinó que la fila TV tenía < 3 latidos (artefacto), mantiene 0
+        if m1.get("tv_episodios") == 0 and (m1.get("ev_total") or 0) == 0:
+            d_f["tv_episodios"] = 0
+
         if m1.get("qtc_canal_mejor_pct", 0) >= 15 and m1.get("qtc_prom"):
             d_f["qtc_prom"] = m1["qtc_prom"]
 
@@ -1172,7 +1229,7 @@ def auditar_motor_3_universal(m1, m2, modalidad):
 
         # BLINDAJE MATRICIAL SPACELABS (CERO ALUCINACIÓN EN CONTEO Y DISPOSITIVOS)
         if m1.get("spacelabs_matrix_ok"):
-            for k in ["total_latidos", "ev_total", "esv_total", "mcp_presente", "mcp_porcentaje", "mcp_latidos", "latidos_normales", "normales_pct", "ev_pct", "esv_pct"]:
+            for k in ["total_latidos", "ev_total", "esv_total", "mcp_presente", "mcp_porcentaje", "mcp_latidos", "latidos_normales", "normales_pct", "ev_pct", "esv_pct", "tiene_dispositivo", "dispositivo_tipo"]:
                 d_f[k] = m1.get(k)
             notas.append(f"🛡️ AUDITORÍA SÚPER SENIOR: Matriz Spacelabs verificada al 100% en {m1.get('paginas_auditadas', 1)} páginas ({d_f['total_latidos']:,} latidos | MCP: {d_f['mcp_porcentaje']}%).")
         else:
@@ -1181,16 +1238,9 @@ def auditar_motor_3_universal(m1, m2, modalidad):
                 d_f[k] = val
             d_f["mcp_porcentaje"], _ = arbitrar_valor("mcp_porcentaje", m1.get("mcp_porcentaje"), m2.get("mcp_porcentaje") if m2 else None, float, "baja")
             d_f["mcp_latidos"], _ = arbitrar_valor("mcp_latidos", m1.get("mcp_latidos"), m2.get("mcp_latidos") if m2 else None, int, "baja")
-            d_f["mcp_presente"] = bool((d_f.get("mcp_latidos") and d_f["mcp_latidos"] > 0) or (d_f.get("mcp_porcentaje") and d_f["mcp_porcentaje"] > 0))
-
-        # Consolidación de dispositivo cardíaco (MCP / CDI / CRI)
-        if m2 and m2.get("dispositivo_tipo") in ["MCP", "CDI", "CRI", "CRI/TRC"] and not d_f.get("dispositivo_tipo"):
-            if d_f.get("mcp_presente"):
-                d_f["dispositivo_tipo"] = m2.get("dispositivo_tipo")
-                d_f["tiene_dispositivo"] = True
-        elif d_f.get("mcp_presente") and not d_f.get("dispositivo_tipo"):
-            d_f["dispositivo_tipo"] = "MCP"
-            d_f["tiene_dispositivo"] = True
+            tot_b = d_f.get("total_latidos") or 1
+            pct_real = ((d_f.get("mcp_latidos") or 0) / tot_b) * 100.0 if tot_b > 0 else 0.0
+            d_f["mcp_presente"] = bool(pct_real >= 1.0 or m1.get("tiene_dispositivo"))
 
         # CONSOLIDACIÓN DE LA LECTURA VISUAL DEL SEGMENTO ST (PUNTO 4)
         st_morf_ia = bool(m2.get("st_morfologia_alterada")) if m2 else False
@@ -1282,13 +1332,13 @@ Tienes las {total_pags} imágenes a 150 DPI nativos y la transcripción completa
 INSTRUCCIÓN MANDATORIA: Debes revisar el 100% de las {total_pags} páginas (Tablas de Página 1, Tiras ECG a 25 mm/s de las páginas intermedias, Gráficas de ST de los 3 canales, Tabla VFC y Tablas QT de los 3 canales).
 
 REGLAS DE AUDITORÍA CLÍNICA PUNTO POR PUNTO:
-1. CONTEO Y DISPOSITIVOS (MCP / CDI / CRI): En la fila 'Conteo' de la Página 1, las 5 columnas son Total, Normal, Ventricular, SupraVentricular y Marcapaso. Solo pon "mcp_presente": true si la 5ta columna (Marcapaso) es > 0. Si dice 0% y 0, es FALSE. Si en Comentarios/DX indica Marcapasos (MCP), Cardiodesfibrilador (CDI) o Cardiorresincronizador (CRI/TRC), indícalo en "dispositivo_tipo".
-2. FC MÍNIMA, MÁXIMA Y PROMEDIO: Toma FC Promedio, Máxima y Mínima exclusivamente de la tabla 'FC (promedio 1 min)' de la Página 1.
-3. PAUSAS Y CONDUCCIÓN AV: Extrae el conteo exacto de 'Pausa' y 'Latido caído' en la Página 1 y la pausa máxima en segundos.
-4. SEGMENTO ST EN TABLA, TIRAS Y GRÁFICAS (MUY IMPORTANTE):
+1. CONTEO Y DISPOSITIVOS (CERO FALSOS POSITIVOS POR RUIDO): En la fila 'Conteo' de la Página 1, las 5 columnas son Total, Normal, Ventricular, SupraVentricular y Marcapaso. ATENCIÓN: Si la columna Marcapaso dice '<1%' con unos pocos latidos aislados (ej. 1 a 50 latidos por ruido/artefacto) y en Comentarios de la prueba NO dice MCP/CDI/CRI y en las tiras NO hay marcas vP/aP/dP, pon `"mcp_presente": false` y `"mcp_porcentaje": 0.0`. Solo pon `"mcp_presente": true` cuando el porcentaje real sea >= 1% o el encabezado indique explícitamente MCP/CDI/CRI.
+2. FC MÍNIMA, MÁXIMA Y PROMEDIO: Toma FC Promedio, Máxima y Mínima de la tabla 'FC (promedio 1 min)' de la Página 1 (nota: a veces 'Máx' y 'Min' están apilados uno encima del otro antes de los dos números).
+3. PAUSAS Y CONDUCCIÓN AV: Extrae el conteo exacto de 'Pausa' y 'Latido caído' en la Página 1 y el Intervalo RR Máx en segundos (si está en ms, divídelo entre 1000).
+4. SEGMENTO ST EN TABLA, TIRAS Y GRÁFICAS:
    - Revisa la tabla 'Resumen de análisis de ST' (conteo de Elevación ST y Depresión ST >= 1.0 mm).
-   - AUNQUE LA TABLA DIGA 0 EVENTOS, inspecciona visualmente todas las TIRAS ECG a 25 mm/s (canales 1, 2 y 3) y las 'Gráficas de ST' (Canal 1, Canal 2 y Canal 3). Si observas alteración del segmento ST (rectificación, aplanamiento, depresión o desplazamiento basal, o contexto de IAMSEST/isquemia), pon `"st_morfologia_alterada": true`.
-5. ARRITMIAS VENTRICULARES Y SUPRAVENTRICULARES: Extrae exclusivamente los conteos reales de la Página 1 ('TV', 'Sec. V/AIVR', 'Apareado', 'Bigeminismo', 'Trigeminismo', 'Eventos individuales de EV', 'TSV', 'Total FA'). No inventes eventos si están en 0.
+   - AUNQUE LA TABLA DIGA 0 EVENTOS, inspecciona visualmente las TIRAS ECG a 25 mm/s y las 'Gráficas de ST' (Canales 1, 2 y 3). Si observas alteración del segmento ST (rectificación, aplanamiento, depresión o desplazamiento basal, o contexto de IAMSEST), pon `"st_morfologia_alterada": true`.
+5. ARRITMIAS VENTRICULARES Y SUPRAVENTRICULARES: Extrae los conteos reales de la Página 1 ('TV' solo si tiene >= 3 latidos, 'Sec. V/AIVR', 'Apareado', 'Bigeminismo', 'Trigeminismo', 'Eventos individuales de EV', 'TSV', 'Total FA').
 6. VARIABILIDAD (SDNN) Y QTc: En la fila 'Valor de 24 horas' de la tabla VFC, el SEGUNDO número es SDNN (mseg). En las tablas de QT ('Todos los períodos' de Canal QT 1, 2 y 3), elige el Prom. QTc (ms) del canal que tenga el MAYOR 'Porcentaje analizado'.
 
 Devuelve ÚNICAMENTE JSON estricto:
@@ -2218,7 +2268,7 @@ with tab_procesar:
                         st.write(f"• **Contexto / Pabellón:** {d.get('comentarios_clinicos') or 'Ambulatorio'} ({d.get('pabellon') or 'Consulta'})")
                         st.write(f"• **Total Latidos:** {d.get('total_latidos') or 0:,}")
                         st.write(f"• **Normales:** {d.get('latidos_normales') or 0:,} ({d.get('normales_pct') or 0}%)")
-                        st.write(f"• **Dispositivo ({disp_label}):** {d.get('mcp_latidos') or 0:,} ({d.get('mcp_porcentaje') or 0}%)")
+                        st.write(f"• **Dispositivo ({disp_label}):** {d.get('mcp_latidos') or 0:,} ({d.get('mcp_porcentaje') or 0.0:.1f}%)")
                     with ca2:
                         st.markdown("**2. Sub-tablas Ventricular / Auricular**")
                         st.write(f"• **TV / Salvas V:** {d.get('tv_episodios') or 0} ep ({d.get('tv_latidos') or 0} lat)")
